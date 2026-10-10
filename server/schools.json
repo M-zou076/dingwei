@@ -1,0 +1,21 @@
+[
+  {
+    "id": "csuft",
+    "name": "中南林业科技大学",
+    "mapPath": "/maps/csuft-campus.jpg",
+    "coordinateSystem": "bd09ll",
+    "bounds": {
+      "west": 112.9935,
+      "east": 113.0080,
+      "south": 28.1315,
+      "north": 28.1455
+    },
+    "grid": {
+      "columns": 18,
+      "rows": 12,
+      "yellowAt": 4,
+      "redAt": 8
+    },
+    "calibrationNote": "第一阶段近似标定；可在 schools.json 中按实测校门坐标校准。"
+  }
+]

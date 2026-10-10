@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>校园地图校准台</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;background:#edf2ec;color:#102a23;font:14px system-ui,"Microsoft YaHei",sans-serif}header{background:#102a23;color:white;padding:18px 24px}header h1{margin:0 0 6px;font-size:22px}header p{margin:0;color:#cbd8d1}.layout{display:grid;grid-template-columns:minmax(420px,1.5fr) minmax(340px,1fr);gap:16px;padding:16px;max-width:1500px;margin:auto}.card{background:white;border-radius:14px;padding:16px;box-shadow:0 5px 20px #16392e12}canvas{display:block;width:100%;background:#dfe7db;border-radius:10px;cursor:crosshair}.toolbar,.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}button,select,input{border:1px solid #c9d4ce;border-radius:9px;padding:9px 11px;background:white;color:#102a23}button{cursor:pointer;font-weight:700}.primary{background:#b9ef32;border-color:#b9ef32}.danger{color:#a61b1b}.field{margin:10px 0}.field label{display:block;font-weight:700;margin-bottom:5px}.field input{width:100%}.coords{display:grid;grid-template-columns:1fr 1fr;gap:8px}.point{display:grid;grid-template-columns:1fr auto;gap:8px;padding:9px;border-bottom:1px solid #edf1ee}.muted{color:#6b7e75;font-size:12px}.status{padding:10px;border-radius:9px;background:#edf7d4;margin-top:10px}.warn{background:#fff2cc}.new-school{border-top:1px solid #e5ebe7;margin-top:14px;padding-top:14px}@media(max-width:900px){.layout{grid-template-columns:1fr;padding:10px}}
+  </style>
+</head>
+<body>
+<header><h1>校园地图多点校准台</h1><p>站在明确地标处读取 BD-09 坐标，再点击图片中的同一位置。至少 3 点，建议 6–10 点并覆盖校园四周。</p></header>
+<main class="layout">
+  <section class="card">
+    <div class="toolbar"><select id="school"></select><button id="reload">刷新</button><span id="calibration" class="muted"></span></div>
+    <canvas id="map" width="1080" height="721"></canvas>
+    <div id="tapHint" class="status warn">请先填写坐标，再点击地图上的对应位置。</div>
+  </section>
+  <section class="card">
+    <div class="field"><label>管理口令</label><input id="token" type="password" placeholder="admin-token.txt 中的内容"></div>
+    <div class="field"><label>控制点名称</label><input id="label" placeholder="例如：西门、图书馆正门"></div>
+    <div class="coords">
+      <div class="field"><label>纬度（BD-09）</label><input id="lat" inputmode="decimal" placeholder="28.xxxxxx"></div>
+      <div class="field"><label>经度（BD-09）</label><input id="lng" inputmode="decimal" placeholder="113.xxxxxx"></div>
+    </div>
+    <div class="toolbar"><button id="geo">读取设备当前位置</button><button id="clear">取消地图选点</button></div>
+    <div class="muted">浏览器定位在部分手机上要求 HTTPS；也可以使用 App 第二阶段的“校准采点”功能。</div>
+    <h3>已记录控制点</h3><div id="points"></div>
+    <button id="save" class="primary">保存并重新计算定位映射</button><div id="result"></div>
+
+    <div class="new-school">
+      <h3>新增学校地图</h3>
+      <div class="coords"><div class="field"><label>学校 ID</label><input id="newId" placeholder="例如 hnu"></div><div class="field"><label>学校名称</label><input id="newName"></div></div>
+      <div class="field"><label>地图图片（PNG/JPG，10MB以内）</label><input id="newImage" type="file" accept="image/png,image/jpeg"></div>
+      <div class="muted">新增后先保存学校，再切换到该校添加控制点。初始边界可后续在 schools.json 调整。</div>
+      <button id="create">创建学校</button>
+    </div>
+  </section>
+</main>
+<script>
+const $=id=>document.getElementById(id), canvas=$('map'), ctx=canvas.getContext('2d');
+let schools=[],current=null,image=new Image(),pending=null;
+$('token').value=localStorage.adminToken||'';$('token').oninput=()=>localStorage.adminToken=$('token').value;
+async function load(){const data=await fetch('/api/v1/schools').then(r=>r.json());schools=data.schools;$('school').innerHTML=schools.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');select(schools[0]?.id)}
+function select(id){current=schools.find(s=>s.id===id);if(!current)return;$('school').value=id;pending=null;image.onload=()=>{canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;draw()};image.src=current.mapUrl+'?v='+Date.now();renderPoints();const c=current.calibration;$('calibration').textContent=c.mode==='affine'?`仿射校准 · ${c.pointCount}点 · 误差${(c.rmse*100).toFixed(2)}%`:'近似边界映射 · 等待控制点';}
+function draw(){ctx.drawImage(image,0,0,canvas.width,canvas.height);(current.controlPoints||[]).forEach((p,i)=>mark(p.x,p.y,String(i+1),'#2563eb'));if(pending)mark(pending.x,pending.y,'新','#dc2626')}
+function mark(x,y,text,color){const px=x*canvas.width,py=y*canvas.height;ctx.beginPath();ctx.arc(px,py,12,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();ctx.strokeStyle='white';ctx.lineWidth=3;ctx.stroke();ctx.fillStyle='white';ctx.textAlign='center';ctx.textBaseline='middle';ctx.font='bold 12px sans-serif';ctx.fillText(text,px,py)}
+canvas.onclick=e=>{const r=canvas.getBoundingClientRect();pending={x:(e.clientX-r.left)/r.width,y:(e.clientY-r.top)/r.height};draw();$('tapHint').textContent=`已选择图片位置：${(pending.x*100).toFixed(2)}%, ${(pending.y*100).toFixed(2)}%。点击“添加控制点”。`;if(!$('addPoint')){const b=document.createElement('button');b.id='addPoint';b.className='primary';b.textContent='添加控制点';b.onclick=addPoint;$('tapHint').append(' ',b)}};
+function addPoint(){const latitude=Number($('lat').value),longitude=Number($('lng').value);if(!pending||!Number.isFinite(latitude)||!Number.isFinite(longitude))return alert('请填写有效经纬度并点击地图');current.controlPoints=current.controlPoints||[];current.controlPoints.push({label:$('label').value||`控制点${current.controlPoints.length+1}`,x:pending.x,y:pending.y,latitude,longitude});pending=null;$('label').value='';renderPoints();draw();$('tapHint').textContent='控制点已加入，完成全部采点后点击保存。'}
+function renderPoints(){$('points').innerHTML=(current?.controlPoints||[]).map((p,i)=>`<div class="point"><div><b>${i+1}. ${p.label}</b><div class="muted">图 ${(p.x*100).toFixed(2)}%, ${(p.y*100).toFixed(2)}% · ${p.latitude.toFixed(7)}, ${p.longitude.toFixed(7)}</div></div><button class="danger" onclick="removePoint(${i})">删除</button></div>`).join('')||'<div class="muted">暂无控制点</div>'}
+window.removePoint=i=>{current.controlPoints.splice(i,1);renderPoints();draw()};
+$('school').onchange=e=>select(e.target.value);$('reload').onclick=load;$('clear').onclick=()=>{pending=null;draw()};
+$('geo').onclick=()=>navigator.geolocation.getCurrentPosition(p=>{$('lat').value=p.coords.latitude.toFixed(7);$('lng').value=p.coords.longitude.toFixed(7)},e=>alert('无法读取位置：'+e.message),{enableHighAccuracy:true,timeout:15000});
+$('save').onclick=async()=>{const r=await saveSchool({...current,imageData:undefined});show(r)};
+async function saveSchool(payload){const response=await fetch('/api/v2/admin/school',{method:'POST',headers:{'Content-Type':'application/json','X-Admin-Token':$('token').value},body:JSON.stringify(payload)});const data=await response.json();if(!response.ok)throw new Error(data.error||'保存失败');return data}
+function show(data){$('result').className='status';$('result').textContent=`保存成功：${data.school.calibration.pointCount} 个控制点，模式 ${data.school.calibration.mode}`;load()}
+$('create').onclick=async()=>{try{const file=$('newImage').files[0];if(!file)throw new Error('请选择地图图片');const imageData=await new Promise((ok,no)=>{const r=new FileReader();r.onload=()=>ok(r.result);r.onerror=no;r.readAsDataURL(file)});const id=$('newId').value.trim(),name=$('newName').value.trim();const data=await saveSchool({id,name,imageData,controlPoints:[],bounds:{west:0,east:1,south:0,north:1},grid:{columns:18,rows:12,yellowAt:4,redAt:8}});show(data)}catch(e){alert(e.message)}};
+load().catch(e=>alert('加载失败：'+e.message));
+</script>
+</body></html>
