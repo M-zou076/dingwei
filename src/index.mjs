@@ -63,12 +63,17 @@ async function weatherFor(school) {
     timezone: 'Asia/Shanghai',
     forecast_days: '1'
   });
-  const response = await fetch(`https://api.open-meteo.com/v1/forecast?${query}`);
+  const weatherUrl = `https://api.open-meteo.com/v1/forecast?${query}`;
+  const cache = caches.default;
+  const cacheKey = new Request(`${weatherUrl}&campus_cache=v2`);
+  const cached = await cache.match(cacheKey);
+  if (cached) return cached.json();
+  const response = await fetch(weatherUrl, { signal: AbortSignal.timeout(4500) });
   if (!response.ok) throw new Error(`天气服务 HTTP ${response.status}`);
   const raw = await response.json();
   const current = raw.current || {};
   const daily = raw.daily || {};
-  return {
+  const result = {
     source: 'Open-Meteo', observedAt: current.time,
     condition: weatherText(Number(current.weather_code)), weatherCode: Number(current.weather_code),
     temperature: Number(current.temperature_2m), apparentTemperature: Number(current.apparent_temperature),
@@ -76,6 +81,9 @@ async function weatherFor(school) {
     maximum: Number(daily.temperature_2m_max?.[0]), minimum: Number(daily.temperature_2m_min?.[0]),
     precipitationProbability: Number(daily.precipitation_probability_max?.[0]), uvIndex: Number(daily.uv_index_max?.[0])
   };
+  const cachedResponse = Response.json(result, { headers: { 'Cache-Control': 'public, max-age=600' } });
+  await cache.put(cacheKey, cachedResponse);
+  return result;
 }
 
 function adviceFor(purpose, weather, crowd) {
