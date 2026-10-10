@@ -1,0 +1,14 @@
+{
+  "name": "campus-travel-cloudflare-worker",
+  "version": "1.4.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check src/index.mjs",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.42.0"
+  }
+}
