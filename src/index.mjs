@@ -7,7 +7,7 @@ const schools = [{
   name: '中南林业科技大学',
   mapPath: '/maps/csuft-campus.jpg',
   coordinateSystem: 'bd09ll',
-  bounds: { west: 112.9935, east: 113.0080, south: 28.1315, north: 28.1455 },
+  bounds: { west: 112.99174, east: 113.01177, south: 28.13487, north: 28.13862 },
   grid: { columns: 18, rows: 12, yellowAt: 4, redAt: 8 },
   calibrationNote: '第一阶段近似标定，可根据实测控制点继续校准。'
 }];
