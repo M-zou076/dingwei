@@ -153,7 +153,7 @@ export class CrowdHub {
       }
       const config = {
         schoolId: String(body.schoolId || ''),
-        count: Math.max(1, Math.min(200, Math.round(Number(body.count) || 1))),
+        count: Math.max(1, Math.min(10000, Math.round(Number(body.count) || 1))),
         mode: ['random', 'clusters', 'point'].includes(body.mode) ? body.mode : 'random',
         centerX: Math.max(0.04, Math.min(0.96, Number(body.centerX) || 0.5)),
         centerY: Math.max(0.04, Math.min(0.96, Number(body.centerY) || 0.5)),
@@ -197,7 +197,39 @@ export class CrowdHub {
 function hashUnit(text) {
   let hash = 2166136261;
   for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 16777619);
+  // FNV alone leaves neighbouring x/y inputs correlated, producing diagonal bands.
+  hash ^= hash >>> 16;
+  hash = Math.imul(hash, 0x7feb352d);
+  hash ^= hash >>> 15;
+  hash = Math.imul(hash, 0x846ca68b);
+  hash ^= hash >>> 16;
   return (hash >>> 0) / 4294967295;
+}
+
+// Approximate visible campus footprint on the supplied map; exclude the grey
+// background and legend from the "whole campus" simulation.
+const CAMPUS_AREAS = [
+  [[.22,.22],[.31,.27],[.40,.43],[.50,.49],[.54,.77],[.27,.78],[.15,.70],[.15,.43]],
+  [[.41,.43],[.56,.30],[.73,.22],[.85,.28],[.88,.62],[.72,.67],[.64,.76],[.55,.65],[.46,.57]],
+  [[.70,.12],[.84,.06],[.90,.34],[.75,.36]]
+];
+
+function insidePolygon(x, y, polygon) {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const [xi, yi] = polygon[i], [xj, yj] = polygon[j];
+    if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+function randomCampusPoint(seed, minute, index) {
+  for (let attempt = 0; attempt < 64; attempt++) {
+    const x = .15 + hashUnit(`${seed}:${minute}:${index}:${attempt}:x`) * .75;
+    const y = .06 + hashUnit(`${seed}:${minute}:${index}:${attempt}:y`) * .73;
+    if (CAMPUS_AREAS.some(area => insidePolygon(x, y, area))) return { x, y };
+  }
+  return { x: .5, y: .5 };
 }
 
 async function crowdFor(env, school) {
@@ -221,8 +253,7 @@ async function crowdFor(env, school) {
         x = center[0] + (hashUnit(`${simulation.seed}:${minute}:${index}:x`) - 0.5) * 0.13;
         y = center[1] + (hashUnit(`${simulation.seed}:${minute}:${index}:y`) - 0.5) * 0.13;
       } else {
-        x = 0.04 + hashUnit(`${simulation.seed}:${minute}:${index}:x`) * 0.92;
-        y = 0.05 + hashUnit(`${simulation.seed}:${minute}:${index}:y`) * 0.90;
+        ({ x, y } = randomCampusPoint(simulation.seed, minute, index));
       }
       x = Math.max(0.01, Math.min(0.99, x));
       y = Math.max(0.01, Math.min(0.99, y));
@@ -237,25 +268,27 @@ async function crowdFor(env, school) {
   }
   const cfg = school.grid;
   const cells = new Map();
+  const dots = [];
   for (const entry of reports) {
     const point = normalized(school, Number(entry.latitude), Number(entry.longitude));
     if (!point.inside) continue;
+    if (entry.simulated) dots.push({ x: point.x, y: point.y });
     const col = Math.min(cfg.columns - 1, Math.floor(point.x * cfg.columns));
     const row = Math.min(cfg.rows - 1, Math.floor(point.y * cfg.rows));
     const key = `${col}:${row}`;
     if (!cells.has(key)) cells.set(key, { col, row, people: [] });
-    cells.get(key).people.push(point);
+    cells.get(key).people.push({ ...point, simulated: Boolean(entry.simulated) });
   }
   const grids = [...cells.values()].map(cell => ({
     col: cell.col, row: cell.row, x: cell.col / cfg.columns, y: cell.row / cfg.rows,
     width: 1 / cfg.columns, height: 1 / cfg.rows, count: cell.people.length,
     level: cell.people.length >= cfg.redAt ? 'red' : cell.people.length >= cfg.yellowAt ? 'yellow' : 'green'
   }));
-  const dots = [];
   const minute = Math.floor(Date.now() / 60000);
   for (const cell of cells.values()) {
-    if (cell.people.length < MIN_DOT_GROUP) continue;
-    cell.people.forEach((point, index) => {
+    const realPeople = cell.people.filter(point => !point.simulated);
+    if (realPeople.length < MIN_DOT_GROUP) continue;
+    realPeople.forEach((point, index) => {
       const jitterX = (hashUnit(`${school.id}:${cell.col}:${cell.row}:${minute}:${index}:x`) - 0.5) * (0.7 / cfg.columns);
       const jitterY = (hashUnit(`${school.id}:${cell.col}:${cell.row}:${minute}:${index}:y`) - 0.5) * (0.7 / cfg.rows);
       dots.push({ x: Math.max(0, Math.min(1, point.x + jitterX)), y: Math.max(0, Math.min(1, point.y + jitterY)) });
