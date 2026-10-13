@@ -1,11 +1,14 @@
 const ACTIVE_MS = 3 * 60 * 1000;
 const MAX_ACCURACY_METERS = 80;
 const MIN_DOT_GROUP = 3;
+const MAP_VERSION = 'pdf-west-20261013';
+const API_REVISION = '2.5.0';
 
 const schools = [{
   id: 'csuft',
   name: '中南林业科技大学',
-  mapPath: '/maps/csuft-campus.jpg?v=pdf-west-20261013',
+  mapPath: `/maps/csuft-campus.jpg?v=${MAP_VERSION}`,
+  mapVersion: MAP_VERSION,
   coordinateSystem: 'bd09ll',
   bounds: { west: 112.99174, east: 113.01177, south: 28.13487, north: 28.13862 },
   grid: { columns: 18, rows: 12, yellowAt: 4, redAt: 8 },
@@ -23,11 +26,31 @@ function json(data, status = 200) {
   return Response.json(data, { status, headers: cors });
 }
 
+function numericValue(value) {
+  if (typeof value === 'number' || typeof value === 'string' && value.trim() !== '') return Number(value);
+  return NaN;
+}
+
 function normalized(school, latitude, longitude) {
   const b = school.bounds;
   const x = (longitude - b.west) / (b.east - b.west);
   const y = (b.north - latitude) / (b.north - b.south);
   return { x, y, inside: x >= 0 && x <= 1 && y >= 0 && y <= 1 };
+}
+
+function validPersonalMapPoint(school, entry) {
+  return entry.mapProjection === 'personal-control' && entry.mapVersion === school.mapVersion &&
+    typeof entry.mapX === 'number' && typeof entry.mapY === 'number' &&
+    Number.isFinite(entry.mapX) && Number.isFinite(entry.mapY) &&
+    entry.mapX >= 0 && entry.mapX <= 1 && entry.mapY >= 0 && entry.mapY <= 1 &&
+    insideCampus(entry.mapX, entry.mapY);
+}
+
+function reportPoint(school, entry) {
+  // A personal control point changes only this report's projection, never the
+  // school's shared bounds or calibration used by other people.
+  if (validPersonalMapPoint(school, entry)) return { x: entry.mapX, y: entry.mapY, inside: true };
+  return normalized(school, Number(entry.latitude), Number(entry.longitude));
 }
 
 function publicSchool(school, origin) {
@@ -137,7 +160,7 @@ export class CrowdHub {
       const key = `location:${body.schoolId}:${body.anonymousId}`;
       await this.state.storage.put(key, { ...body, receivedAt: Date.now() });
       await this.state.storage.setAlarm(Date.now() + ACTIVE_MS);
-      return json({ accepted: true, expiresInSeconds: ACTIVE_MS / 1000 });
+      return json({ accepted: true, expiresInSeconds: ACTIVE_MS / 1000, positionalSource: body.mapProjection === 'personal-control' ? 'personal-map' : 'gps-bounds' });
     }
     if (request.method === 'POST' && url.pathname === '/leave') {
       const body = await request.json();
@@ -286,9 +309,9 @@ async function crowdFor(env, school) {
   const cells = new Map();
   const dots = [];
   for (const entry of reports) {
-    const point = normalized(school, Number(entry.latitude), Number(entry.longitude));
+    const point = reportPoint(school, entry);
     if (!point.inside) continue;
-    if (entry.simulated) dots.push({ x: point.x, y: point.y });
+    if (entry.simulated) dots.push({ x: Math.round(point.x * 10000) / 10000, y: Math.round(point.y * 10000) / 10000 });
     const col = Math.min(cfg.columns - 1, Math.floor(point.x * cfg.columns));
     const row = Math.min(cfg.rows - 1, Math.floor(point.y * cfg.rows));
     const key = `${col}:${row}`;
@@ -327,7 +350,7 @@ export default {
     const school = schools.find(item => item.id === url.searchParams.get('schoolId'));
 
     if (request.method === 'GET' && url.pathname === '/health') {
-      return json({ ok: true, platform: 'cloudflare-workers', time: Date.now() });
+      return json({ ok: true, platform: 'cloudflare-workers', revision: API_REVISION, time: Date.now() });
     }
     if (request.method === 'GET' && url.pathname === '/api/v1/schools') {
       return json({ schools: schools.map(item => publicSchool(item, url.origin)) });
@@ -339,13 +362,22 @@ export default {
       try {
         const body = await request.json();
         const target = schools.find(item => item.id === body.schoolId);
-        const latitude = Number(body.latitude);
-        const longitude = Number(body.longitude);
-        const accuracy = Number(body.accuracy);
+        const latitude = numericValue(body.latitude);
+        const longitude = numericValue(body.longitude);
+        const accuracy = numericValue(body.accuracy);
         if (!target || !body.anonymousId || !Number.isFinite(latitude) || !Number.isFinite(longitude) || !Number.isFinite(accuracy)) return json({ accepted: false, error: '参数不完整' }, 400);
+        if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return json({ accepted: false, error: '经纬度不在有效范围内' }, 422);
         if (accuracy <= 0 || accuracy > MAX_ACCURACY_METERS) return json({ accepted: false, error: `定位精度需优于${MAX_ACCURACY_METERS}米` }, 422);
-        if (!normalized(target, latitude, longitude).inside) return json({ accepted: false, error: '位置不在当前校园地图范围内' }, 422);
-        return crowdRequest(env, '/location', { method: 'POST', body: JSON.stringify({ schoolId: target.id, anonymousId: String(body.anonymousId).slice(0, 100), latitude, longitude, accuracy }) });
+        const hasPersonalProjection = ['mapX', 'mapY', 'mapProjection', 'mapVersion'].some(key => Object.hasOwn(body, key));
+        const projection = {};
+        if (hasPersonalProjection) {
+          if (body.mapVersion !== target.mapVersion) return json({ accepted: false, error: '地图版本不匹配，请更新地图后重新校准' }, 422);
+          if (!validPersonalMapPoint(target, body)) return json({ accepted: false, error: '个人校准位置无效，请在校园地图区域内重新校准' }, 422);
+          Object.assign(projection, { mapX: body.mapX, mapY: body.mapY, mapProjection: 'personal-control', mapVersion: target.mapVersion });
+        } else if (!normalized(target, latitude, longitude).inside) {
+          return json({ accepted: false, error: '位置不在当前校园地图范围内' }, 422);
+        }
+        return crowdRequest(env, '/location', { method: 'POST', body: JSON.stringify({ schoolId: target.id, anonymousId: String(body.anonymousId).slice(0, 100), latitude, longitude, accuracy, ...projection }) });
       } catch (error) {
         return json({ accepted: false, error: error.message }, 400);
       }
