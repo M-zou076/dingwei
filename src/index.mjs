@@ -5,7 +5,7 @@ const MIN_DOT_GROUP = 3;
 const schools = [{
   id: 'csuft',
   name: '中南林业科技大学',
-  mapPath: '/maps/csuft-campus.jpg',
+  mapPath: '/maps/csuft-campus.jpg?v=pdf-west-20261013',
   coordinateSystem: 'bd09ll',
   bounds: { west: 112.99174, east: 113.01177, south: 28.13487, north: 28.13862 },
   grid: { columns: 18, rows: 12, yellowAt: 4, redAt: 8 },
@@ -209,10 +209,14 @@ function hashUnit(text) {
 // Approximate visible campus footprint on the supplied map; exclude the grey
 // background and legend from the "whole campus" simulation.
 const CAMPUS_AREAS = [
-  [[.22,.22],[.31,.27],[.40,.43],[.50,.49],[.54,.77],[.27,.78],[.15,.70],[.15,.43]],
-  [[.41,.43],[.56,.30],[.73,.22],[.85,.28],[.88,.62],[.72,.67],[.64,.76],[.55,.65],[.46,.57]],
-  [[.70,.12],[.84,.06],[.90,.34],[.75,.36]]
+  [[.24,.26],[.31,.32],[.39,.43],[.50,.49],[.53,.78],[.27,.78],[.15,.71],[.15,.45]],
+  [[.40,.43],[.54,.31],[.71,.23],[.82,.28],[.88,.62],[.74,.67],[.65,.78],[.51,.73],[.46,.55]],
+  [[.71,.13],[.83,.07],[.89,.35],[.76,.37]]
 ];
+
+function insideCampus(x, y) {
+  return CAMPUS_AREAS.some(area => insidePolygon(x, y, area));
+}
 
 function insidePolygon(x, y, polygon) {
   let inside = false;
@@ -227,9 +231,21 @@ function randomCampusPoint(seed, minute, index) {
   for (let attempt = 0; attempt < 64; attempt++) {
     const x = .15 + hashUnit(`${seed}:${minute}:${index}:${attempt}:x`) * .75;
     const y = .06 + hashUnit(`${seed}:${minute}:${index}:${attempt}:y`) * .73;
-    if (CAMPUS_AREAS.some(area => insidePolygon(x, y, area))) return { x, y };
+    if (insideCampus(x, y)) return { x, y };
   }
   return { x: .5, y: .5 };
+}
+
+function pointNear(seed, minute, index, center, spreadX, spreadY) {
+  for (let attempt = 0; attempt < 32; attempt++) {
+    const u = Math.max(0.000001, hashUnit(`${seed}:${minute}:${index}:${attempt}:u`));
+    const angle = 2 * Math.PI * hashUnit(`${seed}:${minute}:${index}:${attempt}:a`);
+    const distance = Math.sqrt(-2 * Math.log(u));
+    const x = center[0] + Math.cos(angle) * distance * spreadX;
+    const y = center[1] + Math.sin(angle) * distance * spreadY;
+    if (insideCampus(x, y)) return { x, y };
+  }
+  return randomCampusPoint(seed, minute, index);
 }
 
 async function crowdFor(env, school) {
@@ -239,24 +255,24 @@ async function crowdFor(env, school) {
   const simulation = payload.simulation;
   if (simulation && simulation.count > 0) {
     const minute = Math.floor(Date.now() / 30000);
-    const hotspots = [[0.25, 0.35], [0.52, 0.47], [0.72, 0.30], [0.80, 0.66], [0.39, 0.70]];
+    const hotspots = [
+      [.30, .48, .045, .038], [.54, .47, .065, .045],
+      [.76, .34, .045, .050], [.43, .67, .055, .045],
+      [.75, .61, .055, .040]
+    ];
     for (let index = 0; index < simulation.count; index++) {
-      let x;
-      let y;
-      if (simulation.mode === 'point') {
-        const radius = Math.sqrt(hashUnit(`${simulation.seed}:${minute}:${index}:r`)) * 0.08;
-        const angle = hashUnit(`${simulation.seed}:${minute}:${index}:a`) * Math.PI * 2;
-        x = simulation.centerX + Math.cos(angle) * radius;
-        y = simulation.centerY + Math.sin(angle) * radius;
-      } else if (simulation.mode === 'clusters') {
-        const center = hotspots[index % hotspots.length];
-        x = center[0] + (hashUnit(`${simulation.seed}:${minute}:${index}:x`) - 0.5) * 0.13;
-        y = center[1] + (hashUnit(`${simulation.seed}:${minute}:${index}:y`) - 0.5) * 0.13;
+      const pick = hashUnit(`${simulation.seed}:${minute}:${index}:pick`);
+      let point;
+      if (simulation.mode === 'point' && pick >= .35) {
+        point = pointNear(simulation.seed, minute, index, [simulation.centerX, simulation.centerY], .055, .045);
+      } else if (simulation.mode === 'clusters' && pick >= .35) {
+        const choice = hashUnit(`${simulation.seed}:${minute}:${index}:hotspot`);
+        const center = hotspots[Math.min(hotspots.length - 1, Math.floor(choice * hotspots.length))];
+        point = pointNear(simulation.seed, minute, index, center, center[2], center[3]);
       } else {
-        ({ x, y } = randomCampusPoint(simulation.seed, minute, index));
+        point = randomCampusPoint(simulation.seed, minute, index);
       }
-      x = Math.max(0.01, Math.min(0.99, x));
-      y = Math.max(0.01, Math.min(0.99, y));
+      const { x, y } = point;
       reports.push({
         anonymousId: `sim-${index}`,
         longitude: school.bounds.west + x * (school.bounds.east - school.bounds.west),
@@ -296,6 +312,8 @@ async function crowdFor(env, school) {
   }
   return {
     schoolId: school.id, generatedAt: Date.now(), activeUsers: reports.length,
+    realUsers: reports.filter(entry => !entry.simulated).length,
+    simulatedUsers: reports.filter(entry => entry.simulated).length,
     dataWindowSeconds: ACTIVE_MS / 1000, grids, dots,
     simulation: simulation ? { running: true, count: simulation.count, mode: simulation.mode, startedAt: simulation.startedAt } : { running: false, count: 0 },
     privacy: { minDotGroup: MIN_DOT_GROUP, exactCoordinatesExposed: false }
@@ -345,6 +363,7 @@ export default {
         const body = await request.json();
         const target = schools.find(item => item.id === body.schoolId);
         if (!target) return json({ error: '学校不存在' }, 404);
+        if (body.action !== 'stop' && body.mode === 'point' && !insideCampus(Number(body.centerX), Number(body.centerY))) return json({ error: '请在校园地图区域内选点' }, 400);
         return crowdRequest(env, '/simulation', { method: 'POST', body: JSON.stringify(body) });
       } catch (error) {
         return json({ error: error.message }, 400);
