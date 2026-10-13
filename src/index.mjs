@@ -144,6 +144,25 @@ export class CrowdHub {
       await this.state.storage.delete(`location:${body.schoolId}:${body.anonymousId}`);
       return json({ removed: true });
     }
+    if (request.method === 'POST' && url.pathname === '/simulation') {
+      const body = await request.json();
+      const key = `simulation:${body.schoolId}`;
+      if (body.action === 'stop' || Number(body.count) <= 0) {
+        await this.state.storage.delete(key);
+        return json({ running: false, count: 0 });
+      }
+      const config = {
+        schoolId: String(body.schoolId || ''),
+        count: Math.max(1, Math.min(200, Math.round(Number(body.count) || 1))),
+        mode: ['random', 'clusters', 'point'].includes(body.mode) ? body.mode : 'random',
+        centerX: Math.max(0.04, Math.min(0.96, Number(body.centerX) || 0.5)),
+        centerY: Math.max(0.04, Math.min(0.96, Number(body.centerY) || 0.5)),
+        seed: String(body.seed || Date.now()),
+        startedAt: Date.now()
+      };
+      await this.state.storage.put(key, config);
+      return json({ running: true, ...config });
+    }
     if (request.method === 'GET' && url.pathname === '/reports') {
       const schoolId = url.searchParams.get('schoolId') || '';
       const entries = await this.state.storage.list({ prefix: `location:${schoolId}:` });
@@ -155,7 +174,8 @@ export class CrowdHub {
         else reports.push(value);
       }
       if (expired.length) await this.state.storage.delete(expired);
-      return json({ reports });
+      const simulation = await this.state.storage.get(`simulation:${schoolId}`);
+      return json({ reports, simulation: simulation || null });
     }
     return json({ error: '内部接口不存在' }, 404);
   }
@@ -182,7 +202,39 @@ function hashUnit(text) {
 
 async function crowdFor(env, school) {
   const response = await crowdRequest(env, `/reports?schoolId=${encodeURIComponent(school.id)}`);
-  const { reports } = await response.json();
+  const payload = await response.json();
+  const reports = payload.reports || [];
+  const simulation = payload.simulation;
+  if (simulation && simulation.count > 0) {
+    const minute = Math.floor(Date.now() / 30000);
+    const hotspots = [[0.25, 0.35], [0.52, 0.47], [0.72, 0.30], [0.80, 0.66], [0.39, 0.70]];
+    for (let index = 0; index < simulation.count; index++) {
+      let x;
+      let y;
+      if (simulation.mode === 'point') {
+        const radius = Math.sqrt(hashUnit(`${simulation.seed}:${minute}:${index}:r`)) * 0.08;
+        const angle = hashUnit(`${simulation.seed}:${minute}:${index}:a`) * Math.PI * 2;
+        x = simulation.centerX + Math.cos(angle) * radius;
+        y = simulation.centerY + Math.sin(angle) * radius;
+      } else if (simulation.mode === 'clusters') {
+        const center = hotspots[index % hotspots.length];
+        x = center[0] + (hashUnit(`${simulation.seed}:${minute}:${index}:x`) - 0.5) * 0.13;
+        y = center[1] + (hashUnit(`${simulation.seed}:${minute}:${index}:y`) - 0.5) * 0.13;
+      } else {
+        x = 0.04 + hashUnit(`${simulation.seed}:${minute}:${index}:x`) * 0.92;
+        y = 0.05 + hashUnit(`${simulation.seed}:${minute}:${index}:y`) * 0.90;
+      }
+      x = Math.max(0.01, Math.min(0.99, x));
+      y = Math.max(0.01, Math.min(0.99, y));
+      reports.push({
+        anonymousId: `sim-${index}`,
+        longitude: school.bounds.west + x * (school.bounds.east - school.bounds.west),
+        latitude: school.bounds.north - y * (school.bounds.north - school.bounds.south),
+        accuracy: 12,
+        simulated: true
+      });
+    }
+  }
   const cfg = school.grid;
   const cells = new Map();
   for (const entry of reports) {
@@ -212,6 +264,7 @@ async function crowdFor(env, school) {
   return {
     schoolId: school.id, generatedAt: Date.now(), activeUsers: reports.length,
     dataWindowSeconds: ACTIVE_MS / 1000, grids, dots,
+    simulation: simulation ? { running: true, count: simulation.count, mode: simulation.mode, startedAt: simulation.startedAt } : { running: false, count: 0 },
     privacy: { minDotGroup: MIN_DOT_GROUP, exactCoordinatesExposed: false }
   };
 }
@@ -252,6 +305,16 @@ export default {
         return crowdRequest(env, '/leave', { method: 'POST', body: JSON.stringify({ schoolId: body.schoolId, anonymousId: body.anonymousId }) });
       } catch (error) {
         return json({ removed: false, error: error.message }, 400);
+      }
+    }
+    if (request.method === 'POST' && url.pathname === '/api/v1/simulation') {
+      try {
+        const body = await request.json();
+        const target = schools.find(item => item.id === body.schoolId);
+        if (!target) return json({ error: '学校不存在' }, 404);
+        return crowdRequest(env, '/simulation', { method: 'POST', body: JSON.stringify(body) });
+      } catch (error) {
+        return json({ error: error.message }, 400);
       }
     }
     if (request.method === 'GET' && url.pathname === '/api/v3/weather') {

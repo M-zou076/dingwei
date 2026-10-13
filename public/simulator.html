@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>校园人流模拟后台</title>
+  <style>
+    :root{--ink:#12372d;--green:#08775a;--lime:#c8ef76;--paper:#f3f7f3;--line:#d9e5df;--red:#e44646;--amber:#e8a52d}
+    *{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font-family:system-ui,"Microsoft YaHei",sans-serif}
+    header{background:#fff;border-bottom:1px solid var(--line);padding:22px clamp(18px,5vw,64px)}h1{margin:0 0 5px;font-size:26px}header p{margin:0;color:#64756f}
+    main{max-width:1240px;margin:auto;padding:24px;display:grid;grid-template-columns:340px 1fr;gap:22px}.card{background:#fff;border:1px solid var(--line);border-radius:20px;padding:22px;box-shadow:0 10px 28px #173d3010}
+    label{display:block;font-weight:700;margin:18px 0 8px}.count{display:flex;align-items:center;gap:12px}.count input[type=range]{flex:1}.count output{font-size:25px;font-weight:800;width:58px;text-align:right}
+    select,input[type=number]{width:100%;border:1px solid #b9cbc3;border-radius:12px;padding:12px;background:#fff;color:var(--ink);font-size:15px}
+    .buttons{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:22px}button{border:0;border-radius:13px;padding:13px;font-size:15px;font-weight:800;cursor:pointer}.start{background:var(--lime);color:var(--ink)}.stop{background:#eef3f0;color:#a43636}.status{margin-top:16px;border-radius:13px;background:#edf7f2;padding:13px;line-height:1.6}.status.running{background:#e2f5d6}.note{font-size:13px;color:#687a73;line-height:1.7;margin-top:15px}
+    .map-title{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:14px}.map-title h2{margin:0;font-size:20px}.badge{padding:7px 11px;border-radius:99px;background:#e7f2ed;font-size:13px;font-weight:700}
+    #map{position:relative;overflow:hidden;border-radius:14px;background:#dfe5df;aspect-ratio:1.55;cursor:crosshair}#map>img{width:100%;height:100%;object-fit:fill;display:block}#map:before{content:"";position:absolute;left:12.8%;top:37.5%;width:4.1%;height:5.3%;background:#5b5858}.cell{position:absolute;border-radius:7px;display:grid;place-items:center;color:#fff;font-size:12px;font-weight:800}.cell.green{background:#17a869b9}.cell.yellow{background:#e8a52dcc}.cell.red{background:#e44646cc}.target{position:absolute;width:24px;height:24px;border:4px solid #fff;border-radius:50%;background:#2176ff;box-shadow:0 0 0 10px #2176ff42;transform:translate(-50%,-50%);pointer-events:none}.legend{display:flex;gap:14px;margin-top:13px;font-size:13px;color:#60716b}.legend i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px}.g{background:#17a869}.y{background:var(--amber)}.r{background:var(--red)}
+    @media(max-width:820px){main{grid-template-columns:1fr;padding:14px}.card{padding:17px}}
+  </style>
+</head>
+<body>
+  <header><h1>校园人流模拟后台</h1><p>课程答辩专用 · 选择人数和分布方式，模拟数据会持续保存在云端。</p></header>
+  <main>
+    <section class="card">
+      <h2>模拟参数</h2>
+      <label for="count">模拟人数</label>
+      <div class="count"><input id="count" type="range" min="1" max="200" value="30"><output id="countOut">30</output></div>
+      <label for="mode">人员分布方式</label>
+      <select id="mode">
+        <option value="random">全校随机分布</option>
+        <option value="clusters">多个热点聚集</option>
+        <option value="point">围绕地图选点聚集</option>
+      </select>
+      <div class="buttons"><button class="start" id="start">启动 / 更新模拟</button><button class="stop" id="stop">停止并清空</button></div>
+      <div class="status" id="status">正在读取云端状态…</div>
+      <p class="note">选择“围绕地图选点聚集”后，在右侧地图点击中心位置。模拟运行在云端，关闭本页面后仍会保留；点击“停止并清空”才会结束。</p>
+    </section>
+    <section class="card">
+      <div class="map-title"><h2>模拟结果预览</h2><span class="badge" id="active">0 人在线</span></div>
+      <div id="map"><img src="/maps/csuft-campus.jpg" alt="校园地图"><span class="target" id="target" style="left:50%;top:50%"></span></div>
+      <div class="legend"><span><i class="g"></i>较少</span><span><i class="y"></i>一般</span><span><i class="r"></i>拥挤</span></div>
+    </section>
+  </main>
+  <script>
+    const $=s=>document.querySelector(s), map=$('#map'), target=$('#target');
+    let centerX=.5,centerY=.5;
+    $('#count').oninput=e=>$('#countOut').value=e.target.value;
+    map.onclick=e=>{const r=map.getBoundingClientRect();centerX=(e.clientX-r.left)/r.width;centerY=(e.clientY-r.top)/r.height;target.style.left=`${centerX*100}%`;target.style.top=`${centerY*100}%`;$('#mode').value='point'};
+    async function command(action){
+      const body={action,schoolId:'csuft',count:Number($('#count').value),mode:$('#mode').value,centerX,centerY,seed:crypto.randomUUID()};
+      $('#status').textContent='正在连接云端…';
+      try{const r=await fetch('/api/v1/simulation',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(!r.ok)throw new Error(`HTTP ${r.status}`);await refresh()}catch(e){$('#status').className='status';$('#status').textContent=`操作失败：${e.message}`}
+    }
+    $('#start').onclick=()=>command('start');$('#stop').onclick=()=>command('stop');
+    async function refresh(){
+      try{
+        const r=await fetch('/api/v1/crowd?schoolId=csuft',{cache:'no-store'});if(!r.ok)throw new Error(`HTTP ${r.status}`);const data=await r.json();
+        map.querySelectorAll('.cell').forEach(n=>n.remove());
+        for(const g of data.grids||[]){const n=document.createElement('span');n.className=`cell ${g.level}`;n.style.cssText=`left:${g.x*100}%;top:${g.y*100}%;width:${g.width*100}%;height:${g.height*100}%`;n.textContent=g.count;map.appendChild(n)}
+        $('#active').textContent=`${data.activeUsers||0} 人在线`;
+        const sim=data.simulation||{};$('#status').className=`status${sim.running?' running':''}`;$('#status').textContent=sim.running?`模拟运行中：${sim.count} 人 · ${ {random:'全校随机',clusters:'多个热点',point:'选点聚集'}[sim.mode]||sim.mode }`:'模拟已停止，当前仅显示真实用户';
+      }catch(e){$('#status').className='status';$('#status').textContent=`云端读取失败：${e.message}`}
+    }
+    refresh();setInterval(refresh,5000);
+  </script>
+</body>
+</html>
