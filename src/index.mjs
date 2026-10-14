@@ -1,8 +1,10 @@
+import { generateRoutine, shanghaiTimeMinutes } from './student-routine.mjs';
+
 const ACTIVE_MS = 3 * 60 * 1000;
 const MAX_ACCURACY_METERS = 80;
 const MIN_DOT_GROUP = 3;
 const MAP_VERSION = 'pdf-west-20261013';
-const API_REVISION = '2.5.0';
+const API_REVISION = '2.6.0';
 
 const schools = [{
   id: 'csuft',
@@ -136,8 +138,9 @@ function adviceFor(purpose, weather, crowd) {
   };
   let crowdAdvice = '当前暂无真实人流数据，不能判断拥挤程度。';
   if (crowd.activeUsers > 0) {
-    const red = crowd.grids.filter(item => item.level === 'red').length;
-    crowdAdvice = red ? `当前${crowd.activeUsers}人在线，发现${red}个红色拥挤网格，请绕行。` : `当前${crowd.activeUsers}人在线，暂未发现红色拥挤网格。`;
+    const red = crowd.redCells;
+    const people = crowd.simulatedUsers > 0 ? `模拟${crowd.simulatedUsers}人、真实共享${crowd.realUsers}人` : `真实共享${crowd.realUsers}人`;
+    crowdAdvice = red ? `当前${people}，发现${red}个较密区域，可错峰出行。` : `当前${people}，暂未发现红色较密区域。`;
   }
   return { purpose: known, purposeLabel: labels[known], summary: purposeAdvice[known], weatherAdvice: `${weatherParts.join('；')}。`, crowdAdvice };
 }
@@ -151,6 +154,72 @@ async function crowdRequest(env, path, init = {}) {
 export class CrowdHub {
   constructor(state) {
     this.state = state;
+    this.snapshots = new Map();
+    this.snapshotVersions = new Map();
+    this.pendingSnapshots = new Map();
+  }
+
+  invalidateSnapshot(schoolId) {
+    this.snapshots.delete(schoolId);
+    this.snapshotVersions.set(schoolId, (this.snapshotVersions.get(schoolId) || 0) + 1);
+  }
+
+  async reportsFor(schoolId, now = Date.now()) {
+    const entries = await this.state.storage.list({ prefix: `location:${schoolId}:` });
+    const reports = [], expired = [];
+    for (const [key, value] of entries) {
+      if (now - value.receivedAt > ACTIVE_MS) expired.push(key);
+      else reports.push(value);
+    }
+    if (expired.length) {
+      await this.state.storage.delete(expired);
+      this.invalidateSnapshot(schoolId);
+    }
+    const simulation = await this.state.storage.get(`simulation:${schoolId}`);
+    return { reports, simulation: simulation || null };
+  }
+
+  async snapshotFor(school) {
+    const now = Date.now(), minute = Math.floor(now / 60000);
+    const version = this.snapshotVersions.get(school.id) || 0;
+    const cached = this.snapshots.get(school.id);
+    if (cached && cached.version === version && cached.expiresAt > now) return cached;
+    const pending = this.pendingSnapshots.get(school.id);
+    if (pending && pending.version === version && pending.minute === minute) return pending.promise;
+
+    const task = { version, minute };
+    task.promise = this.buildSnapshot(school).finally(() => {
+      if (this.pendingSnapshots.get(school.id) === task) this.pendingSnapshots.delete(school.id);
+    });
+    this.pendingSnapshots.set(school.id, task);
+    return task.promise;
+  }
+
+  async buildSnapshot(school) {
+    // Mutation may interleave while storage is read. Do not publish a snapshot
+    // from the previous configuration after its invalidation has completed.
+    while (true) {
+      const version = this.snapshotVersions.get(school.id) || 0;
+      const payload = await this.reportsFor(school.id);
+      if (version !== (this.snapshotVersions.get(school.id) || 0)) continue;
+      const now = Date.now();
+      const realExpiry = payload.reports.reduce((expiry, entry) =>
+        Math.min(expiry, entry.receivedAt + ACTIVE_MS + 1), Infinity);
+      const crowd = buildCrowd(school, payload, now);
+      const summary = {
+        schoolId: school.id, generatedAt: crowd.generatedAt,
+        activeUsers: crowd.activeUsers, realUsers: crowd.realUsers,
+        simulatedUsers: crowd.simulatedUsers,
+        redCells: crowd.grids.filter(item => item.level === 'red').length
+      };
+      const snapshot = {
+        version, expiresAt: Math.min((Math.floor(now / 60000) + 1) * 60000, realExpiry,
+          payload.simulation && payload.simulation.mode !== 'routine' ? (Math.floor(now / 30000) + 1) * 30000 : Infinity),
+        body: JSON.stringify(crowd), summaryBody: JSON.stringify(summary)
+      };
+      this.snapshots.set(school.id, snapshot);
+      return snapshot;
+    }
   }
 
   async fetch(request) {
@@ -159,12 +228,14 @@ export class CrowdHub {
       const body = await request.json();
       const key = `location:${body.schoolId}:${body.anonymousId}`;
       await this.state.storage.put(key, { ...body, receivedAt: Date.now() });
+      this.invalidateSnapshot(body.schoolId);
       await this.state.storage.setAlarm(Date.now() + ACTIVE_MS);
       return json({ accepted: true, expiresInSeconds: ACTIVE_MS / 1000, positionalSource: body.mapProjection === 'personal-control' ? 'personal-map' : 'gps-bounds' });
     }
     if (request.method === 'POST' && url.pathname === '/leave') {
       const body = await request.json();
       await this.state.storage.delete(`location:${body.schoolId}:${body.anonymousId}`);
+      this.invalidateSnapshot(body.schoolId);
       return json({ removed: true });
     }
     if (request.method === 'POST' && url.pathname === '/simulation') {
@@ -172,33 +243,34 @@ export class CrowdHub {
       const key = `simulation:${body.schoolId}`;
       if (body.action === 'stop' || Number(body.count) <= 0) {
         await this.state.storage.delete(key);
+        this.invalidateSnapshot(body.schoolId);
         return json({ running: false, count: 0 });
       }
       const config = {
         schoolId: String(body.schoolId || ''),
         count: Math.max(1, Math.min(10000, Math.round(Number(body.count) || 1))),
-        mode: ['random', 'clusters', 'point'].includes(body.mode) ? body.mode : 'random',
+        mode: ['routine', 'random', 'clusters', 'point'].includes(body.mode) ? body.mode : 'routine',
+        timeMode: body.timeMode === 'manual' ? 'manual' : 'auto',
+        timeMinutes: Math.max(0, Math.min(1439, Math.round(Number(body.timeMinutes) || 0))),
         centerX: Math.max(0.04, Math.min(0.96, Number(body.centerX) || 0.5)),
         centerY: Math.max(0.04, Math.min(0.96, Number(body.centerY) || 0.5)),
         seed: String(body.seed || Date.now()),
         startedAt: Date.now()
       };
       await this.state.storage.put(key, config);
+      this.invalidateSnapshot(body.schoolId);
       return json({ running: true, ...config });
+    }
+    if (request.method === 'GET' && (url.pathname === '/crowd' || url.pathname === '/crowd-summary')) {
+      const school = schools.find(item => item.id === url.searchParams.get('schoolId'));
+      if (!school) return json({ error: '学校不存在' }, 404);
+      const snapshot = await this.snapshotFor(school);
+      return new Response(url.pathname === '/crowd' ? snapshot.body : snapshot.summaryBody,
+        { headers: { ...cors, 'Content-Type': 'application/json; charset=utf-8' } });
     }
     if (request.method === 'GET' && url.pathname === '/reports') {
       const schoolId = url.searchParams.get('schoolId') || '';
-      const entries = await this.state.storage.list({ prefix: `location:${schoolId}:` });
-      const now = Date.now();
-      const reports = [];
-      const expired = [];
-      for (const [key, value] of entries) {
-        if (now - value.receivedAt > ACTIVE_MS) expired.push(key);
-        else reports.push(value);
-      }
-      if (expired.length) await this.state.storage.delete(expired);
-      const simulation = await this.state.storage.get(`simulation:${schoolId}`);
-      return json({ reports, simulation: simulation || null });
+      return json(await this.reportsFor(schoolId));
     }
     return json({ error: '内部接口不存在' }, 404);
   }
@@ -207,12 +279,14 @@ export class CrowdHub {
     const entries = await this.state.storage.list({ prefix: 'location:' });
     const now = Date.now();
     const expired = [];
+    const changedSchools = new Set();
     let hasActive = false;
     for (const [key, value] of entries) {
-      if (now - value.receivedAt > ACTIVE_MS) expired.push(key);
+      if (now - value.receivedAt > ACTIVE_MS) { expired.push(key); changedSchools.add(value.schoolId); }
       else hasActive = true;
     }
     if (expired.length) await this.state.storage.delete(expired);
+    for (const schoolId of changedSchools) this.invalidateSnapshot(schoolId);
     if (hasActive) await this.state.storage.setAlarm(now + ACTIVE_MS);
   }
 }
@@ -271,13 +345,17 @@ function pointNear(seed, minute, index, center, spreadX, spreadY) {
   return randomCampusPoint(seed, minute, index);
 }
 
-async function crowdFor(env, school) {
-  const response = await crowdRequest(env, `/reports?schoolId=${encodeURIComponent(school.id)}`);
-  const payload = await response.json();
+function buildCrowd(school, payload, now = Date.now()) {
   const reports = payload.reports || [];
   const simulation = payload.simulation;
-  if (simulation && simulation.count > 0) {
-    const minute = Math.floor(Date.now() / 30000);
+  let routine = null;
+  if (simulation && simulation.count > 0 && simulation.mode === 'routine') {
+    const timeMinutes = simulation.timeMode === 'manual' ? simulation.timeMinutes : shanghaiTimeMinutes(now);
+    const generated = generateRoutine({ count: simulation.count, seed: simulation.seed, timeMinutes });
+    routine = generated.summary;
+    for (const person of generated.points) reports.push({ anonymousId: person.id, imageX: person.x, imageY: person.y, simulated: true });
+  } else if (simulation && simulation.count > 0) {
+    const minute = Math.floor(now / 30000);
     const hotspots = [
       [.30, .48, .045, .038], [.54, .47, .065, .045],
       [.76, .34, .045, .050], [.43, .67, .055, .045],
@@ -309,7 +387,8 @@ async function crowdFor(env, school) {
   const cells = new Map();
   const dots = [];
   for (const entry of reports) {
-    const point = reportPoint(school, entry);
+    const point = entry.simulated && Number.isFinite(entry.imageX) && Number.isFinite(entry.imageY)
+      ? { x: entry.imageX, y: entry.imageY, inside: true } : reportPoint(school, entry);
     if (!point.inside) continue;
     if (entry.simulated) dots.push({ x: Math.round(point.x * 10000) / 10000, y: Math.round(point.y * 10000) / 10000 });
     const col = Math.min(cfg.columns - 1, Math.floor(point.x * cfg.columns));
@@ -323,7 +402,7 @@ async function crowdFor(env, school) {
     width: 1 / cfg.columns, height: 1 / cfg.rows, count: cell.people.length,
     level: cell.people.length >= cfg.redAt ? 'red' : cell.people.length >= cfg.yellowAt ? 'yellow' : 'green'
   }));
-  const minute = Math.floor(Date.now() / 60000);
+  const minute = Math.floor(now / 60000);
   for (const cell of cells.values()) {
     const realPeople = cell.people.filter(point => !point.simulated);
     if (realPeople.length < MIN_DOT_GROUP) continue;
@@ -334,11 +413,11 @@ async function crowdFor(env, school) {
     });
   }
   return {
-    schoolId: school.id, generatedAt: Date.now(), activeUsers: reports.length,
+    schoolId: school.id, generatedAt: now, activeUsers: reports.length,
     realUsers: reports.filter(entry => !entry.simulated).length,
     simulatedUsers: reports.filter(entry => entry.simulated).length,
     dataWindowSeconds: ACTIVE_MS / 1000, grids, dots,
-    simulation: simulation ? { running: true, count: simulation.count, mode: simulation.mode, startedAt: simulation.startedAt } : { running: false, count: 0 },
+    simulation: simulation ? { running: true, count: simulation.count, mode: simulation.mode, startedAt: simulation.startedAt, timeMode: simulation.timeMode || 'auto', timeMinutes: simulation.timeMinutes || 0, routine } : { running: false, count: 0 },
     privacy: { minDotGroup: MIN_DOT_GROUP, exactCoordinatesExposed: false }
   };
 }
@@ -356,7 +435,9 @@ export default {
       return json({ schools: schools.map(item => publicSchool(item, url.origin)) });
     }
     if (request.method === 'GET' && url.pathname === '/api/v1/crowd') {
-      return school ? json(await crowdFor(env, school)) : json({ error: '学校不存在' }, 404);
+      // Keep expensive generation/aggregation in the Durable Object. Relaying
+      // its Response avoids parsing and encoding 10,000 dots in this Worker.
+      return school ? crowdRequest(env, `/crowd?schoolId=${encodeURIComponent(school.id)}`) : json({ error: '学校不存在' }, 404);
     }
     if (request.method === 'POST' && url.pathname === '/api/v1/location') {
       try {
@@ -410,10 +491,11 @@ export default {
       if (!school) return json({ available: false, error: '学校不存在' }, 404);
       let weather = null;
       try { weather = await weatherFor(school); } catch { /* 人流推荐仍然可用 */ }
-      const crowd = await crowdFor(env, school);
+      const crowdResponse = await crowdRequest(env, `/crowd-summary?schoolId=${encodeURIComponent(school.id)}`);
+      const crowd = await crowdResponse.json();
       return json({
         available: true, schoolId: school.id, weatherAvailable: Boolean(weather), weather,
-        crowd: { activeUsers: crowd.activeUsers, redCells: crowd.grids.filter(item => item.level === 'red').length },
+        crowd: { activeUsers: crowd.activeUsers, redCells: crowd.redCells },
         recommendation: adviceFor(url.searchParams.get('purpose'), weather, crowd)
       });
     }
@@ -421,3 +503,4 @@ export default {
     return env.ASSETS.fetch(request);
   }
 };
+
