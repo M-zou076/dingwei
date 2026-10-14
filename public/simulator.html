@@ -6,11 +6,12 @@
   <title>校园人流模拟后台</title>
   <style>
     :root{--ink:#12372d;--green:#08775a;--lime:#c8ef76;--paper:#f3f7f3;--line:#d9e5df;--red:#e44646;--amber:#e8a52d}
-    *{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font-family:system-ui,"Microsoft YaHei",sans-serif}
+    *{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;background:var(--paper);color:var(--ink);font-family:system-ui,"Microsoft YaHei",sans-serif}
     header{background:#fff;border-bottom:1px solid var(--line);padding:22px clamp(18px,5vw,64px)}h1{margin:0 0 5px;font-size:26px}header p{margin:0;color:#64756f}
     main{max-width:1240px;margin:auto;padding:24px;display:grid;grid-template-columns:340px 1fr;gap:22px}.card{background:#fff;border:1px solid var(--line);border-radius:20px;padding:22px;box-shadow:0 10px 28px #173d3010}
     label{display:block;font-weight:700;margin:18px 0 8px}.count{display:flex;align-items:center;gap:12px}.count input[type=range]{flex:1}.count output{font-size:25px;font-weight:800;width:58px;text-align:right}
-    select,input[type=number]{width:100%;border:1px solid #b9cbc3;border-radius:12px;padding:12px;background:#fff;color:var(--ink);font-size:15px}
+    select,input[type=number],input[type=time]{width:100%;border:1px solid #b9cbc3;border-radius:12px;padding:12px;background:#fff;color:var(--ink);font-size:15px}
+    .time-controls{display:grid;grid-template-columns:1fr 110px;gap:8px}.presets{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:10px}.presets button{padding:9px 4px;background:#edf5ef;font-size:12px;font-weight:600}.routine-counts{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:14px 0}.routine-counts div{background:#f3f7f3;border-radius:10px;padding:10px;font-size:13px}.routine-counts b{display:block;font-size:20px;margin-top:4px}.period{padding:12px;border-left:4px solid var(--green);background:#f0f8f3;line-height:1.7;font-size:14px;margin-top:14px}.period strong{display:block}
     .buttons{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:22px}button{border:0;border-radius:13px;padding:13px;font-size:15px;font-weight:800;cursor:pointer}.start{background:var(--lime);color:var(--ink)}.stop{background:#eef3f0;color:#a43636}.status{margin-top:16px;border-radius:13px;background:#edf7f2;padding:13px;line-height:1.6}.status.running{background:#e2f5d6}.note{font-size:13px;color:#687a73;line-height:1.7;margin-top:15px}
     .map-title{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:14px}.map-title h2{margin:0;font-size:20px}.badge{padding:7px 11px;border-radius:99px;background:#e7f2ed;font-size:13px;font-weight:700}
     #map{position:relative;overflow:hidden;border-radius:14px;background:#dfe5df;aspect-ratio:1.55;cursor:crosshair}#map>img{width:100%;height:100%;object-fit:fill;display:block}#map:before{content:"";position:absolute;left:12.8%;top:37.5%;width:4.1%;height:5.3%;background:#5b5858}.people-dots{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}.target{position:absolute;width:24px;height:24px;border:4px solid #fff;border-radius:50%;background:#2176ff;box-shadow:0 0 0 10px #2176ff42;transform:translate(-50%,-50%);pointer-events:none}.legend{margin-top:13px;font-size:13px;color:#60716b;line-height:1.6}.legend b{display:inline-block;width:12px;height:12px;border-radius:50%;vertical-align:middle;margin-right:4px}.density-summary{padding:10px 12px;margin-top:11px;background:#edf7f2;border-radius:10px;font-size:14px}
@@ -18,7 +19,7 @@
   </style>
 </head>
 <body>
-  <header><h1>校园人流模拟后台</h1><p>课程答辩专用 · 选择人数和分布方式，模拟数据会持续保存在云端。</p></header>
+  <header><h1>校园人流模拟后台</h1><p>按学生一天的上课、就餐、自习和休息安排，观察校园人流变化。</p></header>
   <main>
     <section class="card">
       <h2>模拟参数</h2>
@@ -26,16 +27,24 @@
       <div class="count"><input id="count" type="number" min="1" max="10000" value="1000"><output id="countOut">1000</output></div>
       <label for="mode">人员分布方式</label>
       <select id="mode">
+        <option value="routine" selected>按学生作息分布</option>
         <option value="random">全校随机分布</option>
         <option value="clusters">多个热点聚集</option>
         <option value="point">围绕地图选点聚集</option>
       </select>
+      <div id="routineControls">
+        <label for="timeMode">模拟时间（北京时间）</label>
+        <div class="time-controls"><select id="timeMode"><option value="auto">跟随当前时间</option><option value="manual">手动选择时段</option></select><input id="simTime" type="time" value="09:00" disabled aria-label="手动模拟时间"></div>
+        <div class="presets" aria-label="快捷时段"><button data-time="09:00">上午上课</button><button data-time="12:30">午餐</button><button data-time="13:15">午休</button><button data-time="15:00">下午上课</button><button data-time="18:30">晚餐</button><button data-time="20:00">晚课／自习</button></div>
+        <div class="period" id="period"><strong>按作息模拟</strong>上课时教学楼为主；午餐与午休转向食堂和寝室；晚间分配到教室、图书馆及寝室。</div>
+      </div>
       <div class="buttons"><button class="start" id="start">启动 / 更新模拟</button><button class="stop" id="stop">停止并清空</button></div>
       <div class="status" id="status">正在读取云端状态…</div>
-      <p class="note">可设置 1–10000 人。热点模式约 65% 人员聚集，另外约 35% 分布于校园各处；选点模式先在地图上点击校园内的位置。模拟数据保存在云端，点击“停止并清空”才会结束。</p>
+      <p class="note">可设置 1–10000 人。作息模式始终保留少量在路上的学生，饭点和上下课会逐步移动，不会瞬间全员换位置。比例是工作日模拟假设，不代表真实课表。选好参数后点击“启动／更新模拟”；关闭网页不会结束模拟。</p>
     </section>
     <section class="card">
       <div class="map-title"><h2>模拟结果预览</h2><span class="badge" id="active">0 人在线</span></div>
+      <div class="routine-counts" id="routineCounts" hidden></div>
       <div id="map"><img src="/maps/csuft-campus.jpg?v=pdf-west-20261013" alt="新版校园地图"><canvas class="people-dots" id="density" aria-label="人流密度预览"></canvas><canvas class="people-dots" id="peopleDots" aria-label="人流位置预览"></canvas><span class="target" id="target" style="left:50%;top:50%;display:none"></span></div>
       <div class="density-summary" id="densitySummary">正在计算模拟密度…</div>
       <div class="legend"><b style="background:#21a76c"></b>较少　<b style="background:#f4b434"></b>一般　<b style="background:#eb514a"></b>较密。柔和色团表示密度，不是矩形区域；小红点表示模拟位置。</div>
@@ -43,21 +52,28 @@
   </main>
   <script>
     const $=s=>document.querySelector(s), map=$('#map'), target=$('#target');
-    let centerX=.5,centerY=.5;
+    let centerX=.5,centerY=.5,refreshing=false;
+    const labels={routine:'学生作息',random:'全校随机',clusters:'多个热点',point:'选点聚集'};
+    const categoryLabels={teaching:'教学楼',dining:'食堂',dorm:'寝室',study:'图书馆／自习',outdoor:'校园道路与室外'};
     $('#count').oninput=e=>$('#countOut').value=e.target.value;
-    map.onclick=e=>{const r=map.getBoundingClientRect();centerX=(e.clientX-r.left)/r.width;centerY=(e.clientY-r.top)/r.height;target.style.left=`${centerX*100}%`;target.style.top=`${centerY*100}%`;target.style.display='block';$('#mode').value='point'};
-    $('#mode').onchange=e=>{target.style.display=e.target.value==='point'?'block':'none'};
+    map.onclick=e=>{const r=map.getBoundingClientRect();centerX=(e.clientX-r.left)/r.width;centerY=(e.clientY-r.top)/r.height;target.style.left=`${centerX*100}%`;target.style.top=`${centerY*100}%`;$('#mode').value='point';updateControls()};
+    function updateControls(){target.style.display=$('#mode').value==='point'?'block':'none';$('#routineControls').hidden=$('#mode').value!=='routine';$('#simTime').disabled=$('#timeMode').value!=='manual'}
+    $('#mode').onchange=updateControls;$('#timeMode').onchange=updateControls;
+    for(const button of document.querySelectorAll('[data-time]'))button.onclick=()=>{$('#mode').value='routine';$('#timeMode').value='manual';$('#simTime').value=button.dataset.time;updateControls();$('#status').textContent='已选择时段，请点击“启动／更新模拟”'};
     async function command(action){
       const count=Math.round(Number($('#count').value));
       if(action!=='stop'&&(!Number.isFinite(count)||count<1||count>10000)){$('#status').textContent='请输入 1–10000 人';return}
-      const body={action,schoolId:'csuft',count,mode:$('#mode').value,centerX,centerY,seed:crypto.randomUUID()};
+      const [hour,minute]=$('#simTime').value.split(':').map(Number);
+      if(action!=='stop'&&$('#mode').value==='routine'&&$('#timeMode').value==='manual'&&(!Number.isFinite(hour)||!Number.isFinite(minute))){$('#status').textContent='请选择有效的模拟时间';return}
+      const body={action,schoolId:'csuft',count,mode:$('#mode').value,timeMode:$('#timeMode').value,timeMinutes:hour*60+minute,centerX,centerY,seed:'weekday-campus'};
       $('#status').textContent='正在连接云端…';
-      try{const r=await fetch('/api/v1/simulation',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(!r.ok){const error=await r.json().catch(()=>({}));throw new Error(error.error||`HTTP ${r.status}`)}await refresh()}catch(e){$('#status').className='status';$('#status').textContent=`操作失败：${e.message}`}
+      try{const r=await fetch('/api/v1/simulation',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(15000)});if(!r.ok){const error=await r.json().catch(()=>({}));throw new Error(error.error||`HTTP ${r.status}`)}await refresh()}catch(e){$('#status').className='status';$('#status').textContent=`操作失败：${e.message}`}
     }
     $('#start').onclick=()=>command('start');$('#stop').onclick=()=>command('stop');
     async function refresh(){
+      if(refreshing)return;refreshing=true;
       try{
-        const r=await fetch('/api/v1/crowd?schoolId=csuft',{cache:'no-store'});if(!r.ok)throw new Error(`HTTP ${r.status}`);const data=await r.json();
+        const r=await fetch('/api/v1/crowd?schoolId=csuft',{cache:'no-store',signal:AbortSignal.timeout(15000)});if(!r.ok)throw new Error(`HTTP ${r.status}`);const data=await r.json();
         const rect=map.getBoundingClientRect(),ratio=window.devicePixelRatio||1;
         for(const canvas of [$('#density'),$('#peopleDots')]){canvas.width=Math.round(rect.width*ratio);canvas.height=Math.round(rect.height*ratio)}
         const dots=data.dots||[],grids=data.grids||[];
@@ -79,8 +95,14 @@
         for(const dot of dots){ctx.beginPath();ctx.arc(dot.x*rect.width,dot.y*rect.height,radius,0,Math.PI*2);ctx.fill()}
         $('#active').textContent=`模拟 ${data.simulatedUsers||0} · 真实 ${data.realUsers||0}`;
         $('#densitySummary').textContent=dots.length?`当前展示 ${dots.length} 个匿名／模拟位置；最密局部约 ${maxCount} 人。颜色显示相对密度，热点外仍有人。`:'暂无可显示的人流位置';
-        const sim=data.simulation||{};$('#status').className=`status${sim.running?' running':''}`;$('#status').textContent=sim.running?`模拟运行中：${sim.count} 人 · ${ {random:'全校随机',clusters:'多个热点',point:'选点聚集'}[sim.mode]||sim.mode }`:'模拟已停止，当前仅显示真实用户';
+        const sim=data.simulation||{},routine=sim.routine;$('#status').className=`status${sim.running?' running':''}`;$('#status').textContent=sim.running?`模拟运行中：${sim.count} 人 · ${labels[sim.mode]||sim.mode}${routine?' · '+routine.timeLabel:''}`:'模拟已停止，当前仅显示真实用户';
+        const counts=$('#routineCounts');counts.replaceChildren();counts.hidden=!routine;
+        if(routine){
+          const title=document.createElement('strong');title.textContent=`${routine.timeLabel} · ${routine.label}`;$('#period').replaceChildren(title,document.createTextNode('各学生保留自己的寝室与活动安排；换课、就餐逐步移动，室外始终有零散人流。'));
+          for(const [category,label] of Object.entries(categoryLabels)){const card=document.createElement('div'),number=document.createElement('b');number.textContent=`${routine.counts[category]||0} 人`;card.append(document.createTextNode(label),number);counts.append(card)}
+        }
       }catch(e){$('#status').className='status';$('#status').textContent=`云端读取失败：${e.message}`}
+      finally{refreshing=false}
     }
     refresh();setInterval(refresh,5000);
   </script>
