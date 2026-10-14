@@ -1,0 +1,7 @@
+{
+  "name": "campus-mobile-gateway-deploy",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" }
+}
