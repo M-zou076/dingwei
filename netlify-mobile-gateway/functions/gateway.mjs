@@ -1,20 +1,27 @@
 // Generated from the tested fixed-upstream gateway. No dependencies or credentials.
 const gateway = (() => {
 const UPSTREAM_ORIGIN = 'https://dingwei.3531679736.workers.dev';
-const GATEWAY_REVISION = '1.1.0';
+const GATEWAY_REVISION = '2.8.0';
 const MAX_JSON_BYTES = 32 * 1024;
 const UPSTREAM_TIMEOUT_MS = 10000;
-const MAP_PATH = '/maps/csuft-campus.jpg';
+const SCHOOL_MAP_PATHS = new Map([
+  ['csuft', '/maps/csuft-campus.jpg'],
+  ['hunnu-nanyuan', '/maps/hunnu-nanyuan.jpg'],
+  ['hunnu-xianjiahu', '/maps/hunnu-xianjiahu.jpg'],
+  ['hunnu-erlb', '/maps/hunnu-erlb.jpg'],
+  ['hunnu-taohuaping', '/maps/hunnu-taohuaping.jpg'],
+  ['hunnu-zhanggongling', '/maps/hunnu-zhanggongling.jpg']
+]);
 
 const ROUTES = new Map([
   ['/health', { method: 'GET', query: [] }],
   ['/api/v1/schools', { method: 'GET', query: [] }],
-  ['/api/v1/crowd', { method: 'GET', query: ['schoolId'] }],
+  ['/api/v1/crowd', { method: 'GET', query: ['schoolId'], schoolQuery: true }],
   ['/api/v1/location', { method: 'POST', query: [] }],
   ['/api/v1/leave', { method: 'POST', query: [] }],
-  ['/api/v3/weather', { method: 'GET', query: ['schoolId'] }],
-  ['/api/v3/recommendation', { method: 'GET', query: ['schoolId', 'purpose'] }],
-  [MAP_PATH, { method: 'GET', query: ['v'] }],
+  ['/api/v3/weather', { method: 'GET', query: ['schoolId'], schoolQuery: true }],
+  ['/api/v3/recommendation', { method: 'GET', query: ['schoolId', 'purpose'], schoolQuery: true }],
+  ...[...SCHOOL_MAP_PATHS.values()].map(mapPath => [mapPath, { method: 'GET', query: ['v'] }]),
   ['/', { method: 'GET', query: [] }],
   ['/index.html', { method: 'GET', query: [] }]
 ]);
@@ -157,14 +164,17 @@ function rewriteSchools(result, origin) {
   const data = parseUpstreamJson(result.bytes);
   if (!data || !Array.isArray(data.schools)) throw new GatewayError('上游学校数据格式无效');
   for (const school of data.schools) {
+    const expectedMapPath = school && SCHOOL_MAP_PATHS.get(school.id);
+    if (!expectedMapPath) throw new GatewayError('上游校园不在当前入口支持范围内');
     let mapUrl;
     try {
       mapUrl = new URL(school.mapUrl || school.mapPath, UPSTREAM_ORIGIN);
     } catch {
       throw new GatewayError('上游学校地图地址无效');
     }
-    if (mapUrl.origin !== UPSTREAM_ORIGIN || mapUrl.pathname !== MAP_PATH ||
-        [...mapUrl.searchParams.keys()].some(key => key !== 'v')) {
+    if (mapUrl.origin !== UPSTREAM_ORIGIN || mapUrl.username || mapUrl.password || mapUrl.hash ||
+        mapUrl.pathname !== expectedMapPath ||
+        [...mapUrl.searchParams.keys()].some(key => key !== 'v') || mapUrl.searchParams.getAll('v').length > 1) {
       throw new GatewayError('上游学校地图地址不在允许范围内');
     }
     school.mapUrl = `${origin}${mapUrl.pathname}${mapUrl.search}`;
@@ -196,7 +206,7 @@ function landing() {
   return new Response(`<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>校园人流服务入口</title>
 <style>body{font-family:system-ui,sans-serif;max-width:640px;margin:60px auto;padding:0 24px;line-height:1.8;color:#13463c;background:#f5faf7}a{display:inline-block;margin:8px 12px 8px 0;padding:12px 20px;background:#075443;color:white;border-radius:12px;text-decoration:none}small{color:#526963}</style></head>
-<body><h1>校园人流服务入口</h1><p>手机与电脑通过这个入口访问同一套校园人流数据。</p><p><a href="/health">检查手机连接状态</a><a href="${UPSTREAM_ORIGIN}/simulator?v=2.6">电脑模拟后台（原入口）</a></p><p>先检查连接状态：显示 <code>ok: true</code> 和 <code>upstreamConnected: true</code> 表示入口已连接人流服务。手机也能打开后，可将这个网站地址填入 App 的服务地址。</p><small>请在电脑原后台修改模拟人数和时段。本入口不开放修改全校模拟的接口；手机会读取同一套结果，不会另建一套模拟数据。</small></body></html>`, {
+<body><h1>校园人流服务入口</h1><p>手机与电脑通过这个入口访问同一套校园人流数据，按所选校区读取校园图与人流。</p><p><a href="/health">检查手机连接状态</a><a href="${UPSTREAM_ORIGIN}/simulator?v=2.8">电脑模拟后台（原入口）</a></p><p>先检查连接状态：显示 <code>ok: true</code> 和 <code>upstreamConnected: true</code> 表示入口已连接人流服务。手机也能打开后，可将这个网站地址填入 App 的服务地址。</p><small>请在电脑原后台修改模拟人数和时段。本入口不开放模拟管理。湖南师范大学五个手绘校区仅展示模拟人流，不接收真实位置共享；每个校区独立读取，不混用其他校区数据。</small></body></html>`, {
     headers: publicHeaders({ 'Content-Type': 'text/html; charset=utf-8' })
   });
 }
@@ -208,7 +218,7 @@ return {
     // The destination is always the fixed origin; arbitrary paths and encoded
     // separators are rejected before any upstream request is made.
     if (!route || /[%\\]/.test(url.pathname)) return json({ error: '接口不存在' }, 404);
-    if (url.search.length > 2048 || [...url.searchParams.keys()].some(key => !route.query.includes(key))) {
+    if (url.search.length > 2048 || [...url.searchParams.keys()].some(key => !route.query.includes(key) || url.searchParams.getAll(key).length > 1)) {
       return json({ error: '请求包含未允许的查询参数' }, 400);
     }
     if (request.method === 'OPTIONS') {
@@ -216,6 +226,9 @@ return {
     }
     if (request.method !== route.method) {
       return json({ error: '请求方法不允许' }, 405, { Allow: `${route.method},OPTIONS` });
+    }
+    if (route.schoolQuery && !SCHOOL_MAP_PATHS.has(url.searchParams.get('schoolId'))) {
+      return json({ error: '学校不存在' }, 404);
     }
     if (url.pathname === '/' || url.pathname === '/index.html') return landing();
     if (url.pathname === '/health') return health();
@@ -264,6 +277,9 @@ export const config = {
   path: [
     '/', '/index.html', '/health', '/api/v1/schools', '/api/v1/crowd',
     '/api/v1/location', '/api/v1/leave', '/api/v3/weather',
-    '/api/v3/recommendation', '/maps/csuft-campus.jpg'
+    '/api/v3/recommendation', '/maps/csuft-campus.jpg',
+    '/maps/hunnu-nanyuan.jpg', '/maps/hunnu-xianjiahu.jpg',
+    '/maps/hunnu-erlb.jpg', '/maps/hunnu-taohuaping.jpg',
+    '/maps/hunnu-zhanggongling.jpg'
   ]
 };
