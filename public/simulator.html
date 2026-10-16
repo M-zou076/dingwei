@@ -3,108 +3,322 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>校园人流模拟后台</title>
+  <meta name="application-version" content="2.8.0">
+  <title>校园人流模拟后台 · 2.8</title>
   <style>
-    :root{--ink:#12372d;--green:#08775a;--lime:#c8ef76;--paper:#f3f7f3;--line:#d9e5df;--red:#e44646;--amber:#e8a52d}
+    :root{--ink:#12372d;--green:#08775a;--lime:#c8ef76;--paper:#f3f7f3;--line:#d9e5df}
     *{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;background:var(--paper);color:var(--ink);font-family:system-ui,"Microsoft YaHei",sans-serif}
     header{background:#fff;border-bottom:1px solid var(--line);padding:22px clamp(18px,5vw,64px)}h1{margin:0 0 5px;font-size:26px}header p{margin:0;color:#64756f}
-    main{max-width:1240px;margin:auto;padding:24px;display:grid;grid-template-columns:340px 1fr;gap:22px}.card{background:#fff;border:1px solid var(--line);border-radius:20px;padding:22px;box-shadow:0 10px 28px #173d3010}
-    label{display:block;font-weight:700;margin:18px 0 8px}.count{display:flex;align-items:center;gap:12px}.count input[type=range]{flex:1}.count output{font-size:25px;font-weight:800;width:58px;text-align:right}
-    select,input[type=number],input[type=time]{width:100%;border:1px solid #b9cbc3;border-radius:12px;padding:12px;background:#fff;color:var(--ink);font-size:15px}
-    .time-controls{display:grid;grid-template-columns:1fr 110px;gap:8px}.presets{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:10px}.presets button{padding:9px 4px;background:#edf5ef;font-size:12px;font-weight:600}.routine-counts{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:14px 0}.routine-counts div{background:#f3f7f3;border-radius:10px;padding:10px;font-size:13px}.routine-counts b{display:block;font-size:20px;margin-top:4px}.period{padding:12px;border-left:4px solid var(--green);background:#f0f8f3;line-height:1.7;font-size:14px;margin-top:14px}.period strong{display:block}
-    .buttons{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:22px}button{border:0;border-radius:13px;padding:13px;font-size:15px;font-weight:800;cursor:pointer}.start{background:var(--lime);color:var(--ink)}.stop{background:#eef3f0;color:#a43636}.status{margin-top:16px;border-radius:13px;background:#edf7f2;padding:13px;line-height:1.6}.status.running{background:#e2f5d6}.note{font-size:13px;color:#687a73;line-height:1.7;margin-top:15px}
-    .map-title{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:14px}.map-title h2{margin:0;font-size:20px}.badge{padding:7px 11px;border-radius:99px;background:#e7f2ed;font-size:13px;font-weight:700}
-    #map{position:relative;overflow:hidden;border-radius:14px;background:#dfe5df;aspect-ratio:1.55;cursor:crosshair}#map>img{width:100%;height:100%;object-fit:fill;display:block}#map:before{content:"";position:absolute;left:12.8%;top:37.5%;width:4.1%;height:5.3%;background:#5b5858}.people-dots{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}.target{position:absolute;width:24px;height:24px;border:4px solid #fff;border-radius:50%;background:#2176ff;box-shadow:0 0 0 10px #2176ff42;transform:translate(-50%,-50%);pointer-events:none}.legend{margin-top:13px;font-size:13px;color:#60716b;line-height:1.6}.legend b{display:inline-block;width:12px;height:12px;border-radius:50%;vertical-align:middle;margin-right:4px}.density-summary{padding:10px 12px;margin-top:11px;background:#edf7f2;border-radius:10px;font-size:14px}
-    @media(max-width:820px){main{grid-template-columns:1fr;padding:14px}.card{padding:17px}}
+    main{max-width:1340px;margin:auto;padding:24px;display:grid;grid-template-columns:340px minmax(0,1fr);gap:22px}.card{background:#fff;border:1px solid var(--line);border-radius:20px;padding:22px;box-shadow:0 10px 28px #173d3010}
+    h2{font-size:20px;margin:0 0 12px}label{display:block;font-weight:700;margin:16px 0 8px}fieldset{border:0;margin:0;padding:0;min-width:0}fieldset:disabled{opacity:.55}
+    select,input[type=number],input[type=time]{width:100%;border:1px solid #b9cbc3;border-radius:12px;padding:12px;background:#fff;color:var(--ink);font-size:15px}.count{display:flex;align-items:center;gap:10px}.count input{min-width:0}.count output{font-size:20px;font-weight:800;min-width:64px;text-align:right}
+    .time-controls{display:grid;grid-template-columns:1fr 110px;gap:8px}.presets{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:10px}.presets button{padding:9px 4px;background:#edf5ef;font-size:12px}
+    button{border:0;border-radius:12px;padding:12px;font-size:14px;font-weight:750;cursor:pointer;color:var(--ink)}button:disabled{opacity:.45;cursor:not-allowed}.reload{font-size:12px;background:#edf5ef;padding:7px 10px}
+    .buttons{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:20px}.start{background:var(--lime)}.stop{background:#eef3f0;color:#a43636}.status{margin-top:16px;border-radius:13px;background:#edf7f2;padding:13px;line-height:1.6;overflow-wrap:anywhere}.status.running{background:#e2f5d6}.status.error{background:#fff0ed;color:#9b332a}
+    .note{font-size:13px;color:#65776e;line-height:1.7;margin:12px 0 0}.period{padding:11px;border-left:4px solid var(--green);background:#f0f8f3;line-height:1.6;font-size:13px;margin-top:12px}.period strong{display:block}.routine-counts{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:14px 0}.routine-counts div{background:#f3f7f3;border-radius:10px;padding:9px;font-size:12px}.routine-counts b{display:block;font-size:19px;margin-top:4px}
+    .map-title{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:12px}.map-title h2{margin:0}.badge{padding:7px 10px;border-radius:99px;background:#e7f2ed;font-size:12px;font-weight:700;white-space:nowrap}.map-campus{font-size:14px;font-weight:700;margin:0 0 12px}
+    #map{position:relative;overflow:hidden;border-radius:14px;background:#e7ece8;aspect-ratio:1.55;isolation:isolate}#map.ready{cursor:crosshair}#imageLayer{position:absolute;inset:0}#imageLayer>img{width:100%;height:100%;display:block;object-fit:fill}.people-dots{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}.target{position:absolute;width:22px;height:22px;border:4px solid #fff;border-radius:50%;background:#2176ff;box-shadow:0 0 0 9px #2176ff42;transform:translate(-50%,-50%);pointer-events:none}
+    #mapMessage{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:28px;text-align:center;line-height:1.8;background:#e7ece8;color:#546d5e}.density-summary{padding:10px 12px;margin-top:11px;background:#edf7f2;border-radius:10px;font-size:14px;line-height:1.6}.legend{margin-top:12px;font-size:12px;color:#60716b;line-height:1.7}.legend b{display:inline-block;width:11px;height:11px;border-radius:50%;vertical-align:middle;margin-right:4px}
+    @media(max-width:900px){main{grid-template-columns:1fr;padding:14px}.card{padding:17px}.routine-counts{grid-template-columns:repeat(2,1fr)}.badge{white-space:normal}header{padding:18px}h1{font-size:23px}}
   </style>
 </head>
 <body>
-  <header><h1>校园人流模拟后台</h1><p>按学生一天的上课、就餐、自习和休息安排，观察校园人流变化。</p></header>
+  <header><h1>校园人流模拟后台</h1><p>v2.8 · 按学校和校区独立控制；使用各校区自己的内置校园图。</p></header>
   <main>
     <section class="card">
-      <h2>模拟参数</h2>
-      <label for="count">模拟人数</label>
-      <div class="count"><input id="count" type="number" min="1" max="10000" value="1000"><output id="countOut">1000</output></div>
-      <label for="mode">人员分布方式</label>
-      <select id="mode">
-        <option value="routine" selected>按学生作息分布</option>
-        <option value="random">全校随机分布</option>
-        <option value="clusters">多个热点聚集</option>
-        <option value="point">围绕地图选点聚集</option>
-      </select>
-      <div id="routineControls">
-        <label for="timeMode">模拟时间（北京时间）</label>
-        <div class="time-controls"><select id="timeMode"><option value="auto">跟随当前时间</option><option value="manual">手动选择时段</option></select><input id="simTime" type="time" value="09:00" disabled aria-label="手动模拟时间"></div>
-        <div class="presets" aria-label="快捷时段"><button data-time="09:00">上午上课</button><button data-time="12:30">午餐</button><button data-time="13:15">午休</button><button data-time="15:00">下午上课</button><button data-time="18:30">晚餐</button><button data-time="20:00">晚课／自习</button></div>
-        <div class="period" id="period"><strong>按作息模拟</strong>上课时教学楼为主；午餐与午休转向食堂和寝室；晚间分配到教室、图书馆及寝室。</div>
-      </div>
-      <div class="buttons"><button class="start" id="start">启动 / 更新模拟</button><button class="stop" id="stop">停止并清空</button></div>
-      <div class="status" id="status">正在读取云端状态…</div>
-      <p class="note">可设置 1–10000 人。作息模式始终保留少量在路上的学生，饭点和上下课会逐步移动，不会瞬间全员换位置。比例是工作日模拟假设，不代表真实课表。选好参数后点击“启动／更新模拟”；关闭网页不会结束模拟。</p>
+      <div class="map-title"><h2>模拟参数</h2><button id="reloadSchools" class="reload">重新读取校区</button></div>
+      <label for="university">学校</label><select id="university" disabled aria-label="选择学校"><option value="">正在读取学校…</option></select>
+      <label for="campus">校区</label><select id="campus" disabled aria-label="选择校区"><option value="">请先选择学校</option></select>
+      <p class="note" id="campusNote">正在读取内置地图配置。没有内置图的校区不会使用其他学校的地图。</p>
+      <fieldset id="settings" disabled>
+        <label for="count">模拟人数</label><div class="count"><input id="count" type="number" min="1" max="10000" value="1000"><output id="countOut">1000</output></div>
+        <label for="mode">人员分布方式</label><select id="mode"><option value="routine">按学生作息分布</option><option value="random">全校随机分布</option><option value="clusters">多个自然热点聚集</option><option value="point">围绕地图选点聚集</option></select>
+        <p class="note" id="patternNote">热点之外仍保留背景散布，不会把全员塞进一个区域。</p>
+        <div id="routineControls">
+          <label for="timeMode">模拟时间（北京时间）</label>
+          <div class="time-controls"><select id="timeMode"><option value="auto">跟随当前时间</option><option value="manual">手动选择时段</option></select><input id="simTime" type="time" value="09:00" disabled aria-label="手动模拟时间"></div>
+          <div class="presets" aria-label="快捷时段"><button data-time="09:00">上午上课</button><button data-time="12:30">午餐</button><button data-time="13:15">午休</button><button data-time="15:00">下午上课</button><button data-time="18:30">晚餐</button><button data-time="20:00">晚课／自习</button><button data-time="22:30">夜间休息</button></div>
+          <div class="period" id="period"><strong>工作日作息假设</strong>8–12、14–18 点以教学区为主；12–14、18–19 点转向食堂与宿舍；夜间保留自习和宿舍人流。</div>
+        </div>
+      </fieldset>
+      <div class="buttons"><button class="start" id="start" disabled>启动 / 更新本校区</button><button class="stop" id="stop" disabled>停止并清空本校区</button></div>
+      <div class="status" id="status" role="status" aria-live="polite">正在读取学校与校区配置…</div>
+      <p class="note">1–10000 人。不同校区的启动、停止、人数、分布方式和时间互不影响。修改参数后需点“启动／更新”；切换校区不会停止其他校区，关闭网页也不会停止模拟。上课、就餐与休息比例是模拟假设，不代表真实课表。</p>
     </section>
     <section class="card">
-      <div class="map-title"><h2>模拟结果预览</h2><span class="badge" id="active">0 人在线</span></div>
+      <div class="map-title"><h2>模拟结果预览</h2><span class="badge" id="active">尚未选择校区</span></div>
+      <p class="map-campus" id="mapCampus">请选择学校与校区</p>
       <div class="routine-counts" id="routineCounts" hidden></div>
-      <div id="map"><img src="/maps/csuft-campus.jpg?v=pdf-west-20261013" alt="新版校园地图"><canvas class="people-dots" id="density" aria-label="人流密度预览"></canvas><canvas class="people-dots" id="peopleDots" aria-label="人流位置预览"></canvas><span class="target" id="target" style="left:50%;top:50%;display:none"></span></div>
-      <div class="density-summary" id="densitySummary">正在计算模拟密度…</div>
-      <div class="legend"><b style="background:#21a76c"></b>较少　<b style="background:#f4b434"></b>一般　<b style="background:#eb514a"></b>较密。柔和色团表示密度，不是矩形区域；小红点表示模拟位置。</div>
+      <div id="map" aria-busy="true"><div id="imageLayer"></div><canvas class="people-dots" id="density" aria-label="当前校区人流密度"></canvas><canvas class="people-dots" id="peopleDots" aria-label="当前校区人流位置"></canvas><span class="target" id="target" hidden></span><div id="mapMessage">正在读取地图配置…</div></div>
+      <div class="density-summary" id="densitySummary">地图和人流只显示当前选中的校区。</div>
+      <div class="legend"><b style="background:#21a76c"></b>较少　<b style="background:#f4b434"></b>一般　<b style="background:#eb514a"></b>较密。柔和色团表示相对密度；小红点为匿名／模拟位置，不用矩形块表示人流。</div>
     </section>
   </main>
   <script>
-    const $=s=>document.querySelector(s), map=$('#map'), target=$('#target');
-    let centerX=.5,centerY=.5,refreshing=false;
-    const labels={routine:'学生作息',random:'全校随机',clusters:'多个热点',point:'选点聚集'};
-    const categoryLabels={teaching:'教学楼',dining:'食堂',dorm:'寝室',study:'图书馆／自习',outdoor:'校园道路与室外'};
-    $('#count').oninput=e=>$('#countOut').value=e.target.value;
-    map.onclick=e=>{const r=map.getBoundingClientRect();centerX=(e.clientX-r.left)/r.width;centerY=(e.clientY-r.top)/r.height;target.style.left=`${centerX*100}%`;target.style.top=`${centerY*100}%`;$('#mode').value='point';updateControls()};
-    function updateControls(){target.style.display=$('#mode').value==='point'?'block':'none';$('#routineControls').hidden=$('#mode').value!=='routine';$('#simTime').disabled=$('#timeMode').value!=='manual'}
-    $('#mode').onchange=updateControls;$('#timeMode').onchange=updateControls;
-    for(const button of document.querySelectorAll('[data-time]'))button.onclick=()=>{$('#mode').value='routine';$('#timeMode').value='manual';$('#simTime').value=button.dataset.time;updateControls();$('#status').textContent='已选择时段，请点击“启动／更新模拟”'};
-    async function command(action){
-      const count=Math.round(Number($('#count').value));
-      if(action!=='stop'&&(!Number.isFinite(count)||count<1||count>10000)){$('#status').textContent='请输入 1–10000 人';return}
-      const [hour,minute]=$('#simTime').value.split(':').map(Number);
-      if(action!=='stop'&&$('#mode').value==='routine'&&$('#timeMode').value==='manual'&&(!Number.isFinite(hour)||!Number.isFinite(minute))){$('#status').textContent='请选择有效的模拟时间';return}
-      const body={action,schoolId:'csuft',count,mode:$('#mode').value,timeMode:$('#timeMode').value,timeMinutes:hour*60+minute,centerX,centerY,seed:'weekday-campus'};
-      $('#status').textContent='正在连接云端…';
-      try{const r=await fetch('/api/v1/simulation',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(15000)});if(!r.ok){const error=await r.json().catch(()=>({}));throw new Error(error.error||`HTTP ${r.status}`)}await refresh()}catch(e){$('#status').className='status';$('#status').textContent=`操作失败：${e.message}`}
+    'use strict';
+    const $ = function (selector) { return document.querySelector(selector); };
+    const map = $('#map'), target = $('#target');
+    const modeLabels = { routine:'学生作息', random:'全校随机', clusters:'多个热点', point:'选点聚集' };
+    const categoryLabels = { teaching:'教学楼', dining:'食堂', dorm:'寝室', study:'图书馆／自习', outdoor:'道路与室外' };
+    const drafts = new Map(), lastCampusByUniversity = new Map(), pendingCommands = new Map();
+    let schools = [], selectedSchoolId = '', selectionEpoch = 0, catalogSequence = 0, refreshSequence = 0;
+    let refreshing = null, imageReady = false, currentImage = null, latestData = null;
+    const requestedSchoolId = new URLSearchParams(window.location.search).get('schoolId') || '';
+
+    function currentSchool() { return schools.find(function (school) { return school.id === selectedSchoolId; }) || null; }
+    function currentMatches(id, epoch) { return selectedSchoolId === id && selectionEpoch === epoch; }
+    function schoolLabel(school) { return (school.name || school.universityId) + ' · ' + (school.campusName || '校园'); }
+    function status(message, kind) { $('#status').textContent = message; $('#status').className = 'status' + (kind ? ' ' + kind : ''); }
+    function draftFor(id) {
+      if (!drafts.has(id)) drafts.set(id, { count:1000, mode:'routine', timeMode:'auto', simTime:'09:00', centerX:null, centerY:null, dirty:false });
+      return drafts.get(id);
     }
-    $('#start').onclick=()=>command('start');$('#stop').onclick=()=>command('stop');
-    async function refresh(){
-      if(refreshing)return;refreshing=true;
-      try{
-        const r=await fetch('/api/v1/crowd?schoolId=csuft',{cache:'no-store',signal:AbortSignal.timeout(15000)});if(!r.ok)throw new Error(`HTTP ${r.status}`);const data=await r.json();
-        const rect=map.getBoundingClientRect(),ratio=window.devicePixelRatio||1;
-        for(const canvas of [$('#density'),$('#peopleDots')]){canvas.width=Math.round(rect.width*ratio);canvas.height=Math.round(rect.height*ratio)}
-        const dots=data.dots||[],grids=data.grids||[];
-        const maxCount=Math.max(1,...grids.map(grid=>grid.count));
-        const heat=$('#density').getContext('2d');heat.scale(ratio,ratio);
-        for(const grid of grids){
-          if(grid.count<2)continue;
-          const strength=grid.count/maxCount,x=(grid.x+grid.width/2)*rect.width,y=(grid.y+grid.height/2)*rect.height;
-          const radius=Math.max(grid.width*rect.width,grid.height*rect.height)*1.65;
-          const color=strength>.72?'235,81,74':strength>.42?'244,180,52':'33,167,108';
-          const gradient=heat.createRadialGradient(x,y,0,x,y,radius);
-          gradient.addColorStop(0,`rgba(${color},${(.10+.22*strength).toFixed(2)})`);
-          gradient.addColorStop(.55,`rgba(${color},${(.05+.11*strength).toFixed(2)})`);
-          gradient.addColorStop(1,`rgba(${color},0)`);
-          heat.fillStyle=gradient;heat.beginPath();heat.arc(x,y,radius,0,Math.PI*2);heat.fill();
-        }
-        const ctx=$('#peopleDots').getContext('2d');ctx.scale(ratio,ratio);ctx.fillStyle='rgba(211,39,50,.62)';
-        const radius=dots.length>3000?1:1.65;
-        for(const dot of dots){ctx.beginPath();ctx.arc(dot.x*rect.width,dot.y*rect.height,radius,0,Math.PI*2);ctx.fill()}
-        $('#active').textContent=`模拟 ${data.simulatedUsers||0} · 真实 ${data.realUsers||0}`;
-        $('#densitySummary').textContent=dots.length?`当前展示 ${dots.length} 个匿名／模拟位置；最密局部约 ${maxCount} 人。颜色显示相对密度，热点外仍有人。`:'暂无可显示的人流位置';
-        const sim=data.simulation||{},routine=sim.routine;$('#status').className=`status${sim.running?' running':''}`;$('#status').textContent=sim.running?`模拟运行中：${sim.count} 人 · ${labels[sim.mode]||sim.mode}${routine?' · '+routine.timeLabel:''}`:'模拟已停止，当前仅显示真实用户';
-        const counts=$('#routineCounts');counts.replaceChildren();counts.hidden=!routine;
-        if(routine){
-          const title=document.createElement('strong');title.textContent=`${routine.timeLabel} · ${routine.label}`;$('#period').replaceChildren(title,document.createTextNode('各学生保留自己的寝室与活动安排；换课、就餐逐步移动，室外始终有零散人流。'));
-          for(const [category,label] of Object.entries(categoryLabels)){const card=document.createElement('div'),number=document.createElement('b');number.textContent=`${routine.counts[category]||0} 人`;card.append(document.createTextNode(label),number);counts.append(card)}
-        }
-      }catch(e){$('#status').className='status';$('#status').textContent=`云端读取失败：${e.message}`}
-      finally{refreshing=false}
+    function captureDraft(dirty) {
+      if (!selectedSchoolId) return;
+      const draft = draftFor(selectedSchoolId);
+      draft.count = $('#count').value; draft.mode = $('#mode').value;
+      draft.timeMode = $('#timeMode').value; draft.simTime = $('#simTime').value;
+      if (dirty) draft.dirty = true;
     }
-    refresh();setInterval(refresh,5000);
+    function showDraft(draft) {
+      $('#count').value = draft.count; $('#countOut').value = draft.count;
+      $('#mode').value = draft.mode; $('#timeMode').value = draft.timeMode; $('#simTime').value = draft.simTime;
+    }
+    function validPolygon(polygon) {
+      return Array.isArray(polygon) && polygon.length >= 3 && polygon.every(function (point) {
+        return Array.isArray(point) && point.length === 2 && point.every(function (value) { return Number.isFinite(value) && value >= 0 && value <= 1; });
+      });
+    }
+    function pointInPolygon(x, y, polygon) {
+      let inside = false;
+      for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+        const a = polygon[j], b = polygon[i];
+        const cross = (x-a[0])*(b[1]-a[1])-(y-a[1])*(b[0]-a[0]);
+        if (Math.abs(cross) < 1e-9 && x >= Math.min(a[0],b[0])-1e-9 && x <= Math.max(a[0],b[0])+1e-9 && y >= Math.min(a[1],b[1])-1e-9 && y <= Math.max(a[1],b[1])+1e-9) return true;
+        if ((b[1]>y)!==(a[1]>y) && x < (a[0]-b[0])*(y-b[1])/(a[1]-b[1])+b[0]) inside = !inside;
+      }
+      return inside;
+    }
+    function insideCampus(school, x, y) {
+      const config = school && school.simulationConfig;
+      return !!config && Number.isFinite(x) && Number.isFinite(y) && x >= 0 && x <= 1 && y >= 0 && y <= 1
+        && Array.isArray(config.polygons) && config.polygons.some(function (polygon) { return validPolygon(polygon) && pointInPolygon(x,y,polygon); })
+        && Array.isArray(config.excludedPolygons || [])
+        && !(config.excludedPolygons || []).some(function (polygon) { return validPolygon(polygon) && pointInPolygon(x,y,polygon); });
+    }
+    function mapUrl(school) {
+      if (!school || school.mapType !== 'image' || !school.mapVersion) return null;
+      try {
+        const url = new URL(school.mapUrl || school.mapPath, window.location.href);
+        if (url.origin !== window.location.origin || !/^\/maps\/[A-Za-z0-9_-]+\.jpg$/.test(url.pathname)
+          || Array.from(url.searchParams.keys()).some(function (key) { return key !== 'v'; })) return null;
+        url.searchParams.set('v', school.mapVersion);
+        return url.href;
+      } catch (_) { return null; }
+    }
+    function supported(school) {
+      return !!school && school.simulationSupported === true && !!mapUrl(school)
+        && !!school.simulationConfig && Array.isArray(school.simulationConfig.polygons)
+        && school.simulationConfig.polygons.length > 0 && school.simulationConfig.polygons.every(validPolygon)
+        && Array.isArray(school.simulationConfig.excludedPolygons || [])
+        && (school.simulationConfig.excludedPolygons || []).every(validPolygon);
+    }
+    function updateControls() {
+      const school = currentSchool(), available = supported(school), pending = pendingCommands.has(selectedSchoolId);
+      const mode = $('#mode').value, draft = selectedSchoolId ? draftFor(selectedSchoolId) : null;
+      $('#settings').disabled = !available || pending;
+      $('#routineControls').hidden = mode !== 'routine';
+      $('#simTime').disabled = $('#timeMode').value !== 'manual' || !available || pending;
+      const pointReady = draft && insideCampus(school, draft.centerX, draft.centerY);
+      target.hidden = !imageReady || mode !== 'point' || !pointReady;
+      if (!target.hidden) { target.style.left = (draft.centerX*100)+'%'; target.style.top = (draft.centerY*100)+'%'; }
+      $('#start').disabled = !available || !imageReady || pending || (mode === 'point' && !pointReady);
+      $('#stop').disabled = !available || pending;
+      $('#patternNote').textContent = mode === 'point'
+        ? '请在当前校图内点选聚集中心；热点之外仍有背景人流，图例和空白区域不能选。'
+        : mode === 'clusters' ? '依据当前校区的多个建筑热点自然聚集，热点之外仍保留零散人流。'
+        : mode === 'random' ? '只在当前校区的有效地图区域内随机散布，不沿对角线排列。'
+        : '按当前校区教学楼、食堂、宿舍和自习区分配，跨时段会逐步移动。';
+    }
+    function clearCanvas() {
+      for (const selector of ['#density','#peopleDots']) {
+        const canvas = $(selector); canvas.getContext('2d').clearRect(0,0,canvas.width,canvas.height);
+      }
+    }
+    function clearPreview(message) {
+      latestData = null; imageReady = false; currentImage = null; clearCanvas();
+      $('#imageLayer').replaceChildren(); $('#mapMessage').hidden = false; $('#mapMessage').textContent = message;
+      $('#map').className = ''; $('#map').setAttribute('aria-busy','true'); target.hidden = true;
+      $('#routineCounts').replaceChildren(); $('#routineCounts').hidden = true;
+      $('#active').textContent = '尚无人流数据'; $('#densitySummary').textContent = message;
+    }
+    function renderLastData() {
+      if (!imageReady || !latestData || latestData.schoolId !== selectedSchoolId) return;
+      const data = latestData, rect = map.getBoundingClientRect(), ratio = Math.min(3,window.devicePixelRatio || 1);
+      if (!rect.width || !rect.height) return;
+      for (const selector of ['#density','#peopleDots']) { const canvas = $(selector); canvas.width = Math.round(rect.width*ratio); canvas.height = Math.round(rect.height*ratio); }
+      const grids = Array.isArray(data.grids) ? data.grids : [], dots = Array.isArray(data.dots) ? data.dots : [];
+      const validGrids = grids.filter(function (grid) { return [grid.x,grid.y,grid.width,grid.height,grid.count].every(Number.isFinite) && grid.count > 0 && grid.width > 0 && grid.height > 0; });
+      const maxCount = validGrids.reduce(function (max,grid) { return Math.max(max,grid.count); },0);
+      const heat = $('#density').getContext('2d'); heat.scale(ratio,ratio);
+      for (const grid of validGrids) {
+        if (grid.count < 2) continue;
+        const strength = grid.count/Math.max(1,maxCount), x=(grid.x+grid.width/2)*rect.width, y=(grid.y+grid.height/2)*rect.height;
+        const radius = Math.max(grid.width*rect.width,grid.height*rect.height)*1.65;
+        const color = strength>.72?'235,81,74':strength>.42?'244,180,52':'33,167,108';
+        const gradient = heat.createRadialGradient(x,y,0,x,y,radius);
+        gradient.addColorStop(0,'rgba('+color+','+(.10+.22*strength).toFixed(2)+')');
+        gradient.addColorStop(.55,'rgba('+color+','+(.05+.11*strength).toFixed(2)+')'); gradient.addColorStop(1,'rgba('+color+',0)');
+        heat.fillStyle=gradient; heat.beginPath(); heat.arc(x,y,radius,0,Math.PI*2); heat.fill();
+      }
+      const ctx = $('#peopleDots').getContext('2d'); ctx.scale(ratio,ratio); ctx.fillStyle='rgba(211,39,50,.62)';
+      const radius = dots.length>3000?1:1.65;
+      for (const dot of dots) if (Number.isFinite(dot.x) && Number.isFinite(dot.y) && dot.x>=0 && dot.x<=1 && dot.y>=0 && dot.y<=1) {
+        ctx.beginPath(); ctx.arc(dot.x*rect.width,dot.y*rect.height,radius,0,Math.PI*2); ctx.fill();
+      }
+      $('#densitySummary').textContent = dots.length ? '当前校区展示 '+dots.length+' 个匿名／模拟位置；最密局部约 '+maxCount+' 人。颜色为相对密度，热点外仍有零散人流。' : '当前校区暂无可显示的人流位置';
+    }
+    function makeOption(value, text) { const option=document.createElement('option'); option.value=value; option.textContent=text; return option; }
+    function populateCampuses(universityId, preferred) {
+      const select=$('#campus'); select.replaceChildren();
+      const list=schools.filter(function (school) { return school.universityId===universityId; });
+      if (!list.length) { select.append(makeOption('','没有可用校区')); select.disabled=true; return ''; }
+      for (const school of list) select.append(makeOption(school.id,school.campusName || school.id));
+      select.disabled=false; select.value=list.some(function (school) { return school.id===preferred; })?preferred:list[0].id; return select.value;
+    }
+    function selectSchool(id) {
+      captureDraft(false);
+      selectedSchoolId=id; const epoch=++selectionEpoch;
+      if (refreshing) refreshing.controller.abort(); refreshing=null;
+      clearPreview('正在读取当前校区地图…');
+      const school=currentSchool(); $('#mapCampus').textContent=school?schoolLabel(school):'尚未选择有效校区';
+      if (!school) { status('找不到指定校区，请手动选择已有内置图的学校与校区。','error'); $('#campusNote').textContent='未知校区不会使用林科大或其他校区的地图。'; clearPreview('没有此校区的内置地图'); updateControls(); return; }
+      lastCampusByUniversity.set(school.universityId,id); showDraft(draftFor(id));
+      $('#period').replaceChildren(document.createTextNode('8–12、14–18 点教学区为主；12–14、18–19 点食堂与宿舍为主；夜间保留自习和宿舍人流。'));
+      if (!supported(school)) { status('当前校区尚无可用的内置校图或模拟配置，不能启动模拟。','error'); $('#campusNote').textContent='请更新本校区的地图与 v2.8 云端配置，不会套用其他校区。'; clearPreview('当前校区尚不可模拟'); updateControls(); return; }
+      $('#campusNote').textContent = school.simulationOnly
+        ? '本校区使用已提供的手绘示意图，只模拟图片位置；尚未地理配准，不据此显示真实 GPS 定位。'
+        : '地图、模拟状态与参数仅属于当前校区；真实位置仍遵守原有匿名共享规则。';
+      status('正在读取 '+schoolLabel(school)+' 的云端状态…'); updateControls();
+      const img=document.createElement('img'); currentImage=img; img.alt=schoolLabel(school)+' 内置校园图'; img.decoding='async';
+      img.onload=function () {
+        if (!currentMatches(id,epoch) || currentImage!==img) return;
+        if (!img.naturalWidth || !img.naturalHeight) { img.onerror(); return; }
+        imageReady=true; map.style.aspectRatio=img.naturalWidth+' / '+img.naturalHeight;
+        map.className='ready'; map.setAttribute('aria-busy','false'); $('#mapMessage').hidden=true;
+        updateControls(); renderLastData();
+      };
+      img.onerror=function () {
+        if (!currentMatches(id,epoch) || currentImage!==img) return;
+        imageReady=false; clearCanvas(); $('#mapMessage').hidden=false; $('#mapMessage').textContent='本校区地图加载失败，请检查该校区图片是否已部署；不会显示其他学校的地图。';
+        status('当前校区内置图未能加载，暂不能启动；仍可停止本校区已有模拟。','error'); updateControls();
+      };
+      $('#imageLayer').replaceChildren(img); img.src=mapUrl(school); refresh();
+    }
+    async function api(path, options) {
+      options=options || {}; const controller=new AbortController(), external=options.signal;
+      const abort=function () { controller.abort(); }; if (external) { if (external.aborted) abort(); else external.addEventListener('abort',abort,{once:true}); }
+      const timer=setTimeout(abort,15000);
+      try {
+        const response=await fetch(path,{ method:options.method || 'GET', cache:'no-store', signal:controller.signal,
+          headers:options.body?{'Content-Type':'application/json'}:{Accept:'application/json'}, body:options.body?JSON.stringify(options.body):undefined });
+        const data=await response.json().catch(function () { throw new Error('云端未返回 JSON，请检查部署'); });
+        if (!response.ok) throw new Error(data.error || 'HTTP '+response.status);
+        return data;
+      } finally { clearTimeout(timer); if (external) external.removeEventListener('abort',abort); }
+    }
+    async function loadSchools() {
+      const sequence=++catalogSequence; $('#reloadSchools').disabled=true;
+      try {
+        const payload=await api('/api/v1/schools'); if (sequence!==catalogSequence) return;
+        if (!Array.isArray(payload.schools)) throw new Error('学校配置格式无效');
+        captureDraft(false);
+        schools=payload.schools.filter(function (school) { return school && /^[A-Za-z0-9_-]{1,100}$/.test(school.id) && typeof school.universityId==='string'; });
+        const university=$('#university'); university.replaceChildren(); const groups=new Map();
+        for (const school of schools) if (!groups.has(school.universityId)) groups.set(school.universityId,school.name || school.universityId);
+        for (const entry of groups) university.append(makeOption(entry[0],entry[1]));
+        university.disabled=!groups.size; if (!groups.size) throw new Error('云端未配置任何校区');
+        const preferred=selectedSchoolId || requestedSchoolId || (schools.some(function (school) { return school.id==='csuft'; })?'csuft':schools[0].id);
+        const school=schools.find(function (item) { return item.id===preferred; });
+        if (!school) { university.value=''; $('#campus').replaceChildren(makeOption('','请手动选择校区')); $('#campus').disabled=true; selectSchool(''); return; }
+        university.value=school.universityId; populateCampuses(school.universityId,school.id); selectSchool(school.id);
+      } catch (error) {
+        if (sequence!==catalogSequence) return;
+        if (!schools.length) { clearPreview('无法读取校区配置，请点击“重新读取校区”'); $('#university').disabled=true; $('#campus').disabled=true; selectedSchoolId=''; ++selectionEpoch; updateControls(); }
+        status('读取学校失败：'+(error.name==='AbortError'?'连接超时':error.message),'error');
+      } finally { if (sequence===catalogSequence) $('#reloadSchools').disabled=false; }
+    }
+    function applyCloudParameters(simulation) {
+      const draft=draftFor(selectedSchoolId); if (draft.dirty || !simulation.running) return;
+      if (Number.isInteger(simulation.count) && simulation.count>=1 && simulation.count<=10000) draft.count=simulation.count;
+      if (Object.hasOwn(modeLabels,simulation.mode)) draft.mode=simulation.mode;
+      if (simulation.timeMode==='auto' || simulation.timeMode==='manual') draft.timeMode=simulation.timeMode;
+      if (Number.isInteger(simulation.timeMinutes) && simulation.timeMinutes>=0 && simulation.timeMinutes<1440) draft.simTime=String(Math.floor(simulation.timeMinutes/60)).padStart(2,'0')+':'+String(simulation.timeMinutes%60).padStart(2,'0');
+      if (insideCampus(currentSchool(),simulation.centerX,simulation.centerY)) { draft.centerX=simulation.centerX; draft.centerY=simulation.centerY; }
+      showDraft(draft); updateControls();
+    }
+    function showCloudState(data) {
+      const school=currentSchool(), simulation=data.simulation || {}, routine=simulation.routine;
+      applyCloudParameters(simulation);
+      $('#active').textContent='模拟 '+(data.simulatedUsers || 0)+' · 真实 '+(data.realUsers || 0);
+      const dirty=draftFor(selectedSchoolId).dirty?'（参数已修改，尚未应用）':'';
+      status(simulation.running?'本校区运行中：'+simulation.count+' 人 · '+(modeLabels[simulation.mode] || simulation.mode)+(routine?' · '+routine.timeLabel:'')+dirty:'本校区模拟已停止'+dirty,simulation.running?'running':'');
+      const counts=$('#routineCounts'); counts.replaceChildren(); counts.hidden=!routine;
+      if (routine) {
+        const title=document.createElement('strong'); title.textContent=routine.timeLabel+' · '+routine.label;
+        $('#period').replaceChildren(title,document.createTextNode('依据本校区建筑与道路逐步移动，热点外也保留学生。'));
+        for (const entry of Object.entries(categoryLabels)) { const card=document.createElement('div'),number=document.createElement('b'); number.textContent=((routine.counts || {})[entry[0]] || 0)+' 人'; card.append(document.createTextNode(entry[1]),number); counts.append(card); }
+      }
+      if (school && !imageReady && currentImage && currentImage.complete && !currentImage.naturalWidth) status('当前校区图片加载失败，不能启动新模拟。','error');
+    }
+    async function refresh() {
+      const school=currentSchool(), id=selectedSchoolId, epoch=selectionEpoch;
+      if (!supported(school) || refreshing && refreshing.id===id && refreshing.epoch===epoch) return;
+      const controller=new AbortController(), sequence=++refreshSequence; refreshing={id:id,epoch:epoch,sequence:sequence,controller:controller};
+      try {
+        const data=await api('/api/v1/crowd?schoolId='+encodeURIComponent(id),{signal:controller.signal});
+        if (!currentMatches(id,epoch) || !refreshing || refreshing.sequence!==sequence) return;
+        if (data.schoolId!==id || data.simulation && data.simulation.schoolId && data.simulation.schoolId!==id) throw new Error('返回的人流不属于当前校区，已拒绝显示');
+        latestData=data; showCloudState(data); renderLastData();
+      } catch (error) { if (currentMatches(id,epoch) && refreshing && refreshing.sequence===sequence) status('本校区云端读取失败：'+(error.name==='AbortError'?'连接超时':error.message),'error'); }
+      finally { if (refreshing && refreshing.sequence===sequence) refreshing=null; }
+    }
+    async function command(action) {
+      const school=currentSchool(), id=selectedSchoolId, epoch=selectionEpoch;
+      if (!supported(school) || pendingCommands.has(id)) return;
+      if (action!=='stop' && !imageReady) { status('请等待本校区地图加载完成。','error'); return; }
+      captureDraft(false); const draft=draftFor(id), count=Number(draft.count);
+      if (action!=='stop' && (!Number.isInteger(count) || count<1 || count>10000)) { status('请输入 1–10000 的整数人数','error'); return; }
+      const parts=draft.simTime.split(':').map(Number), hour=parts[0], minute=parts[1];
+      if (action!=='stop' && draft.timeMode==='manual' && (!Number.isInteger(hour) || !Number.isInteger(minute) || hour<0 || hour>23 || minute<0 || minute>59)) { status('请选择有效的北京时间','error'); return; }
+      if (action!=='stop' && draft.mode==='point' && !insideCampus(school,draft.centerX,draft.centerY)) { status('请在当前校园有效区域内点选聚集中心。','error'); return; }
+      const body=action==='stop'?{action:'stop',schoolId:id}:{action:'start',schoolId:id,count:count,mode:draft.mode,timeMode:draft.timeMode,timeMinutes:Number.isInteger(hour)&&Number.isInteger(minute)?hour*60+minute:0,centerX:draft.centerX===null?.5:draft.centerX,centerY:draft.centerY===null?.5:draft.centerY,seed:'weekday-campus:'+id};
+      const token={}; pendingCommands.set(id,token); updateControls(); status('正在'+(action==='stop'?'停止':'更新')+' '+schoolLabel(school)+'…');
+      try {
+        const result=await api('/api/v1/simulation',{method:'POST',body:body});
+        if (result.schoolId && result.schoolId!==id) throw new Error('操作返回了其他校区，已拒绝应用');
+        if (!currentMatches(id,epoch)) return;
+        draft.dirty=false; if (refreshing) { refreshing.controller.abort(); refreshing=null; }
+        await refresh();
+      } catch (error) { if (currentMatches(id,epoch)) status('本校区操作失败：'+(error.name==='AbortError'?'连接超时':error.message),'error'); }
+      finally { if (pendingCommands.get(id)===token) pendingCommands.delete(id); if (currentMatches(id,epoch)) updateControls(); }
+    }
+
+    $('#university').onchange=function () { captureDraft(false); const universityId=this.value; selectSchool(populateCampuses(universityId,lastCampusByUniversity.get(universityId))); };
+    $('#campus').onchange=function () { selectSchool(this.value); };
+    for (const selector of ['#count','#mode','#timeMode','#simTime']) $(selector).oninput=$(selector).onchange=function () { captureDraft(true); $('#countOut').value=$('#count').value; updateControls(); };
+    for (const button of document.querySelectorAll('[data-time]')) button.onclick=function () { $('#mode').value='routine'; $('#timeMode').value='manual'; $('#simTime').value=button.dataset.time; captureDraft(true); updateControls(); status('已选北京时间 '+button.dataset.time+'，请点击“启动／更新本校区”。'); };
+    map.onclick=function (event) {
+      const school=currentSchool(); if (!supported(school) || !imageReady || pendingCommands.has(selectedSchoolId)) return;
+      const rect=map.getBoundingClientRect(),x=(event.clientX-rect.left)/rect.width,y=(event.clientY-rect.top)/rect.height;
+      if (!insideCampus(school,x,y)) { status('请选择当前校区内的有效位置；标题、图例和空白不能作为聚集中心。','error'); return; }
+      const draft=draftFor(selectedSchoolId); draft.centerX=x; draft.centerY=y; $('#mode').value='point'; captureDraft(true); updateControls(); status('已选聚集中心。热点外仍有背景人流；点击“启动／更新本校区”应用。');
+    };
+    $('#start').onclick=function () { return command('start'); }; $('#stop').onclick=function () { return command('stop'); };
+    $('#reloadSchools').onclick=loadSchools;
+    window.addEventListener('resize',renderLastData);
+    if (typeof ResizeObserver==='function') new ResizeObserver(renderLastData).observe(map);
+    loadSchools(); setInterval(refresh,5000);
   </script>
 </body>
 </html>
