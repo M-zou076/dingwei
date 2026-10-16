@@ -1,21 +1,11 @@
-import { generateRoutine, shanghaiTimeMinutes } from './student-routine.mjs';
+import { shanghaiTimeMinutes } from './student-routine.mjs';
+import { SCHOOLS as schools, getSchool, getCampusSimulation, insideCampus as insideCampusMap, simulationConfig } from './campus-maps.mjs';
+import { generateCampusRoutine, randomCampusPoint as randomMapPoint, pointNearCampus } from './campus-routine.mjs';
 
 const ACTIVE_MS = 3 * 60 * 1000;
 const MAX_ACCURACY_METERS = 80;
 const MIN_DOT_GROUP = 3;
-const MAP_VERSION = 'pdf-west-20261013';
-const API_REVISION = '2.6.0';
-
-const schools = [{
-  id: 'csuft',
-  name: '中南林业科技大学',
-  mapPath: `/maps/csuft-campus.jpg?v=${MAP_VERSION}`,
-  mapVersion: MAP_VERSION,
-  coordinateSystem: 'bd09ll',
-  bounds: { west: 112.99174, east: 113.01177, south: 28.13487, north: 28.13862 },
-  grid: { columns: 18, rows: 12, yellowAt: 4, redAt: 8 },
-  calibrationNote: '第一阶段近似标定，可根据实测控制点继续校准。'
-}];
+const API_REVISION = '2.8.0';
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -33,19 +23,59 @@ function numericValue(value) {
   return NaN;
 }
 
+function locationInput(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return {error:'请求需为JSON对象',status:400};
+  const school = getSchool(body.schoolId);
+  if (!school) return { error: '学校不存在', status: 404 };
+  if (!school.sharedLocationEnabled) return { error: '此校区手绘图尚未地理配准，仅支持模拟；不接受GPS或客户端图片坐标上报', status: 422 };
+  const latitude = numericValue(body.latitude), longitude = numericValue(body.longitude), accuracy = numericValue(body.accuracy);
+  if (!body.anonymousId || !Number.isFinite(latitude) || !Number.isFinite(longitude) || !Number.isFinite(accuracy)) return { error: '参数不完整', status: 400 };
+  if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return { error: '经纬度不在有效范围内', status: 422 };
+  if (accuracy <= 0 || accuracy > MAX_ACCURACY_METERS) return { error: `定位精度需优于${MAX_ACCURACY_METERS}米`, status: 422 };
+  const hasProjection = ['mapX','mapY','mapProjection','mapVersion'].some(key => Object.hasOwn(body,key));
+  const projection = {};
+  if (hasProjection) {
+    if (body.mapVersion !== school.mapVersion) return { error: '地图版本不匹配，请更新地图后重新校准', status: 422 };
+    if (!validPersonalMapPoint(school,body)) return { error: '个人校准位置无效，请在校园地图区域内重新校准', status: 422 };
+    Object.assign(projection,{mapX:body.mapX,mapY:body.mapY,mapProjection:'personal-control',mapVersion:school.mapVersion});
+  } else if (!normalized(school,latitude,longitude).inside) return { error: '位置不在当前校园地图范围内', status: 422 };
+  return { value:{schoolId:school.id,anonymousId:String(body.anonymousId).slice(0,100),latitude,longitude,accuracy,...projection} };
+}
+
+function simulationInput(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return {error:'请求需为JSON对象',status:400};
+  const school = getSchool(body.schoolId);
+  if (!school || !school.simulationSupported) return {error:'学校不存在或不支持模拟',status:404};
+  if (body.action === 'stop' || Object.hasOwn(body,'count') && numericValue(body.count) === 0) return {value:{schoolId:school.id,action:'stop',count:0}};
+  const count = numericValue(body.count);
+  if (!Number.isFinite(count) || count < 1 || count > 10000) return {error:'模拟人数需为1至10000',status:422};
+  const mode = body.mode || 'routine';
+  if (!['routine','random','clusters','point'].includes(mode)) return {error:'模拟分布方式无效',status:422};
+  const timeMode = body.timeMode === undefined ? 'auto' : body.timeMode;
+  if (!['auto','manual'].includes(timeMode)) return {error:'时间模式无效',status:422};
+  const timeMinutes = body.timeMinutes === undefined ? 0 : numericValue(body.timeMinutes);
+  if (!Number.isFinite(timeMinutes) || timeMinutes < 0 || timeMinutes > 1439) return {error:'手动时间需为0至1439分钟',status:422};
+  const centerX = numericValue(body.centerX), centerY = numericValue(body.centerY);
+  if (mode === 'point' && !insideCampusMap(school.id,centerX,centerY)) return {error:'请在当前校区可用地图区域内选点',status:400};
+  return {value:{schoolId:school.id,count:Math.round(count),mode,timeMode,timeMinutes:Math.round(timeMinutes),
+    centerX:Number.isFinite(centerX)?centerX:.5,centerY:Number.isFinite(centerY)?centerY:.5,
+    seed:String(body.seed || Date.now()).slice(0,100),startedAt:Date.now()}};
+}
+
 function normalized(school, latitude, longitude) {
   const b = school.bounds;
+  if (!school.sharedLocationEnabled || !b) return { x: NaN, y: NaN, inside: false };
   const x = (longitude - b.west) / (b.east - b.west);
   const y = (b.north - latitude) / (b.north - b.south);
   return { x, y, inside: x >= 0 && x <= 1 && y >= 0 && y <= 1 };
 }
 
 function validPersonalMapPoint(school, entry) {
-  return entry.mapProjection === 'personal-control' && entry.mapVersion === school.mapVersion &&
+  return school.sharedLocationEnabled && entry.mapProjection === 'personal-control' && entry.mapVersion === school.mapVersion &&
     typeof entry.mapX === 'number' && typeof entry.mapY === 'number' &&
     Number.isFinite(entry.mapX) && Number.isFinite(entry.mapY) &&
     entry.mapX >= 0 && entry.mapX <= 1 && entry.mapY >= 0 && entry.mapY <= 1 &&
-    insideCampus(entry.mapX, entry.mapY);
+    insideCampusMap(school.id, entry.mapX, entry.mapY);
 }
 
 function reportPoint(school, entry) {
@@ -59,7 +89,7 @@ function publicSchool(school, origin) {
   return {
     ...school,
     mapUrl: `${origin}${school.mapPath}`,
-    calibration: { mode: 'bounds', status: 'approximate', pointCount: 0 }
+    simulationConfig: simulationConfig(school.id)
   };
 }
 
@@ -76,6 +106,7 @@ function weatherText(code) {
 }
 
 async function weatherFor(school) {
+  if (!school.bounds) throw new Error('此校区手绘图尚无地理配准，不能从图片坐标推算天气经纬度');
   const center = {
     latitude: (school.bounds.north + school.bounds.south) / 2,
     longitude: (school.bounds.east + school.bounds.west) / 2
@@ -225,7 +256,9 @@ export class CrowdHub {
   async fetch(request) {
     const url = new URL(request.url);
     if (request.method === 'POST' && url.pathname === '/location') {
-      const body = await request.json();
+      const input = locationInput(await request.json());
+      if (input.error) return json({accepted:false,error:input.error},input.status);
+      const body = input.value;
       const key = `location:${body.schoolId}:${body.anonymousId}`;
       await this.state.storage.put(key, { ...body, receivedAt: Date.now() });
       this.invalidateSnapshot(body.schoolId);
@@ -234,29 +267,25 @@ export class CrowdHub {
     }
     if (request.method === 'POST' && url.pathname === '/leave') {
       const body = await request.json();
+      const school = getSchool(body.schoolId);
+      if (!school) return json({removed:false,error:'学校不存在'},404);
+      if (!school.sharedLocationEnabled) return json({removed:false,error:'此校区未开启共享定位'},422);
+      if (!body.anonymousId) return json({removed:false,error:'匿名编号缺失'},400);
       await this.state.storage.delete(`location:${body.schoolId}:${body.anonymousId}`);
       this.invalidateSnapshot(body.schoolId);
       return json({ removed: true });
     }
     if (request.method === 'POST' && url.pathname === '/simulation') {
-      const body = await request.json();
+      const input = simulationInput(await request.json());
+      if (input.error) return json({error:input.error},input.status);
+      const body = input.value;
       const key = `simulation:${body.schoolId}`;
       if (body.action === 'stop' || Number(body.count) <= 0) {
         await this.state.storage.delete(key);
         this.invalidateSnapshot(body.schoolId);
-        return json({ running: false, count: 0 });
+        return json({ schoolId:body.schoolId, running: false, count: 0 });
       }
-      const config = {
-        schoolId: String(body.schoolId || ''),
-        count: Math.max(1, Math.min(10000, Math.round(Number(body.count) || 1))),
-        mode: ['routine', 'random', 'clusters', 'point'].includes(body.mode) ? body.mode : 'routine',
-        timeMode: body.timeMode === 'manual' ? 'manual' : 'auto',
-        timeMinutes: Math.max(0, Math.min(1439, Math.round(Number(body.timeMinutes) || 0))),
-        centerX: Math.max(0.04, Math.min(0.96, Number(body.centerX) || 0.5)),
-        centerY: Math.max(0.04, Math.min(0.96, Number(body.centerY) || 0.5)),
-        seed: String(body.seed || Date.now()),
-        startedAt: Date.now()
-      };
+      const config = body;
       await this.state.storage.put(key, config);
       this.invalidateSnapshot(body.schoolId);
       return json({ running: true, ...config });
@@ -270,6 +299,7 @@ export class CrowdHub {
     }
     if (request.method === 'GET' && url.pathname === '/reports') {
       const schoolId = url.searchParams.get('schoolId') || '';
+      if (!getSchool(schoolId)) return json({error:'学校不存在'},404);
       return json(await this.reportsFor(schoolId));
     }
     return json({ error: '内部接口不存在' }, 404);
@@ -303,82 +333,40 @@ function hashUnit(text) {
   return (hash >>> 0) / 4294967295;
 }
 
-// Approximate visible campus footprint on the supplied map; exclude the grey
-// background and legend from the "whole campus" simulation.
-const CAMPUS_AREAS = [
-  [[.24,.26],[.31,.32],[.39,.43],[.50,.49],[.53,.78],[.27,.78],[.15,.71],[.15,.45]],
-  [[.40,.43],[.54,.31],[.71,.23],[.82,.28],[.88,.62],[.74,.67],[.65,.78],[.51,.73],[.46,.55]],
-  [[.71,.13],[.83,.07],[.89,.35],[.76,.37]]
-];
-
-function insideCampus(x, y) {
-  return CAMPUS_AREAS.some(area => insidePolygon(x, y, area));
-}
-
-function insidePolygon(x, y, polygon) {
-  let inside = false;
-  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-    const [xi, yi] = polygon[i], [xj, yj] = polygon[j];
-    if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
-  }
-  return inside;
-}
-
-function randomCampusPoint(seed, minute, index) {
-  for (let attempt = 0; attempt < 64; attempt++) {
-    const x = .15 + hashUnit(`${seed}:${minute}:${index}:${attempt}:x`) * .75;
-    const y = .06 + hashUnit(`${seed}:${minute}:${index}:${attempt}:y`) * .73;
-    if (insideCampus(x, y)) return { x, y };
-  }
-  return { x: .5, y: .5 };
-}
-
-function pointNear(seed, minute, index, center, spreadX, spreadY) {
-  for (let attempt = 0; attempt < 32; attempt++) {
-    const u = Math.max(0.000001, hashUnit(`${seed}:${minute}:${index}:${attempt}:u`));
-    const angle = 2 * Math.PI * hashUnit(`${seed}:${minute}:${index}:${attempt}:a`);
-    const distance = Math.sqrt(-2 * Math.log(u));
-    const x = center[0] + Math.cos(angle) * distance * spreadX;
-    const y = center[1] + Math.sin(angle) * distance * spreadY;
-    if (insideCampus(x, y)) return { x, y };
-  }
-  return randomCampusPoint(seed, minute, index);
-}
-
 function buildCrowd(school, payload, now = Date.now()) {
-  const reports = payload.reports || [];
+  // Uncalibrated illustrated campuses can never consume real GPS/image reports,
+  // including stale records from an older configuration in durable storage.
+  const reports = school.sharedLocationEnabled ? [...(payload.reports || [])] : [];
   const simulation = payload.simulation;
   let routine = null;
   if (simulation && simulation.count > 0 && simulation.mode === 'routine') {
     const timeMinutes = simulation.timeMode === 'manual' ? simulation.timeMinutes : shanghaiTimeMinutes(now);
-    const generated = generateRoutine({ count: simulation.count, seed: simulation.seed, timeMinutes });
+    const generated = generateCampusRoutine({ schoolId:school.id, count: simulation.count, seed: simulation.seed, timeMinutes });
     routine = generated.summary;
     for (const person of generated.points) reports.push({ anonymousId: person.id, imageX: person.x, imageY: person.y, simulated: true });
   } else if (simulation && simulation.count > 0) {
     const minute = Math.floor(now / 30000);
-    const hotspots = [
+    const hotspots = school.id === 'csuft' ? [
       [.30, .48, .045, .038], [.54, .47, .065, .045],
       [.76, .34, .045, .050], [.43, .67, .055, .045],
       [.75, .61, .055, .040]
-    ];
+    ] : getCampusSimulation(school.id).areas.filter(area=>area.category!=='outdoor').map(area=>[area.x,area.y,area.rx,area.ry]);
     for (let index = 0; index < simulation.count; index++) {
       const pick = hashUnit(`${simulation.seed}:${minute}:${index}:pick`);
       let point;
       if (simulation.mode === 'point' && pick >= .35) {
-        point = pointNear(simulation.seed, minute, index, [simulation.centerX, simulation.centerY], .055, .045);
+        point = pointNearCampus(school.id,`${simulation.seed}:${minute}:${index}`,{x:simulation.centerX,y:simulation.centerY},.055,.045);
       } else if (simulation.mode === 'clusters' && pick >= .35) {
         const choice = hashUnit(`${simulation.seed}:${minute}:${index}:hotspot`);
         const center = hotspots[Math.min(hotspots.length - 1, Math.floor(choice * hotspots.length))];
-        point = pointNear(simulation.seed, minute, index, center, center[2], center[3]);
+        point = pointNearCampus(school.id,`${simulation.seed}:${minute}:${index}`,{x:center[0],y:center[1]},center[2],center[3]);
       } else {
-        point = randomCampusPoint(simulation.seed, minute, index);
+        point = randomMapPoint(school.id,`${simulation.seed}:${minute}:${index}`);
       }
       const { x, y } = point;
       reports.push({
         anonymousId: `sim-${index}`,
-        longitude: school.bounds.west + x * (school.bounds.east - school.bounds.west),
-        latitude: school.bounds.north - y * (school.bounds.north - school.bounds.south),
-        accuracy: 12,
+        imageX:x,imageY:y,
         simulated: true
       });
     }
@@ -389,7 +377,7 @@ function buildCrowd(school, payload, now = Date.now()) {
   for (const entry of reports) {
     const point = entry.simulated && Number.isFinite(entry.imageX) && Number.isFinite(entry.imageY)
       ? { x: entry.imageX, y: entry.imageY, inside: true } : reportPoint(school, entry);
-    if (!point.inside) continue;
+    if (!point.inside || entry.simulated && school.id !== 'csuft' && !insideCampusMap(school.id,point.x,point.y)) continue;
     if (entry.simulated) dots.push({ x: Math.round(point.x * 10000) / 10000, y: Math.round(point.y * 10000) / 10000 });
     const col = Math.min(cfg.columns - 1, Math.floor(point.x * cfg.columns));
     const row = Math.min(cfg.rows - 1, Math.floor(point.y * cfg.rows));
@@ -417,7 +405,7 @@ function buildCrowd(school, payload, now = Date.now()) {
     realUsers: reports.filter(entry => !entry.simulated).length,
     simulatedUsers: reports.filter(entry => entry.simulated).length,
     dataWindowSeconds: ACTIVE_MS / 1000, grids, dots,
-    simulation: simulation ? { running: true, count: simulation.count, mode: simulation.mode, startedAt: simulation.startedAt, timeMode: simulation.timeMode || 'auto', timeMinutes: simulation.timeMinutes || 0, routine } : { running: false, count: 0 },
+    simulation: simulation ? { schoolId:school.id, running: true, count: simulation.count, mode: simulation.mode, startedAt: simulation.startedAt, seed:simulation.seed, centerX:simulation.centerX, centerY:simulation.centerY, timeMode: simulation.timeMode || 'auto', timeMinutes: simulation.timeMinutes || 0, routine } : { schoolId:school.id, running: false, count: 0 },
     privacy: { minDotGroup: MIN_DOT_GROUP, exactCoordinatesExposed: false }
   };
 }
@@ -441,24 +429,9 @@ export default {
     }
     if (request.method === 'POST' && url.pathname === '/api/v1/location') {
       try {
-        const body = await request.json();
-        const target = schools.find(item => item.id === body.schoolId);
-        const latitude = numericValue(body.latitude);
-        const longitude = numericValue(body.longitude);
-        const accuracy = numericValue(body.accuracy);
-        if (!target || !body.anonymousId || !Number.isFinite(latitude) || !Number.isFinite(longitude) || !Number.isFinite(accuracy)) return json({ accepted: false, error: '参数不完整' }, 400);
-        if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return json({ accepted: false, error: '经纬度不在有效范围内' }, 422);
-        if (accuracy <= 0 || accuracy > MAX_ACCURACY_METERS) return json({ accepted: false, error: `定位精度需优于${MAX_ACCURACY_METERS}米` }, 422);
-        const hasPersonalProjection = ['mapX', 'mapY', 'mapProjection', 'mapVersion'].some(key => Object.hasOwn(body, key));
-        const projection = {};
-        if (hasPersonalProjection) {
-          if (body.mapVersion !== target.mapVersion) return json({ accepted: false, error: '地图版本不匹配，请更新地图后重新校准' }, 422);
-          if (!validPersonalMapPoint(target, body)) return json({ accepted: false, error: '个人校准位置无效，请在校园地图区域内重新校准' }, 422);
-          Object.assign(projection, { mapX: body.mapX, mapY: body.mapY, mapProjection: 'personal-control', mapVersion: target.mapVersion });
-        } else if (!normalized(target, latitude, longitude).inside) {
-          return json({ accepted: false, error: '位置不在当前校园地图范围内' }, 422);
-        }
-        return crowdRequest(env, '/location', { method: 'POST', body: JSON.stringify({ schoolId: target.id, anonymousId: String(body.anonymousId).slice(0, 100), latitude, longitude, accuracy, ...projection }) });
+        const input = locationInput(await request.json());
+        if (input.error) return json({accepted:false,error:input.error},input.status);
+        return crowdRequest(env, '/location', { method:'POST',body:JSON.stringify(input.value) });
       } catch (error) {
         return json({ accepted: false, error: error.message }, 400);
       }
@@ -466,6 +439,10 @@ export default {
     if (request.method === 'POST' && url.pathname === '/api/v1/leave') {
       try {
         const body = await request.json();
+        const target = getSchool(body.schoolId);
+        if (!target) return json({removed:false,error:'学校不存在'},404);
+        if (!target.sharedLocationEnabled) return json({removed:false,error:'此校区未开启共享定位'},422);
+        if (!body.anonymousId) return json({removed:false,error:'匿名编号缺失'},400);
         return crowdRequest(env, '/leave', { method: 'POST', body: JSON.stringify({ schoolId: body.schoolId, anonymousId: body.anonymousId }) });
       } catch (error) {
         return json({ removed: false, error: error.message }, 400);
@@ -473,11 +450,9 @@ export default {
     }
     if (request.method === 'POST' && url.pathname === '/api/v1/simulation') {
       try {
-        const body = await request.json();
-        const target = schools.find(item => item.id === body.schoolId);
-        if (!target) return json({ error: '学校不存在' }, 404);
-        if (body.action !== 'stop' && body.mode === 'point' && !insideCampus(Number(body.centerX), Number(body.centerY))) return json({ error: '请在校园地图区域内选点' }, 400);
-        return crowdRequest(env, '/simulation', { method: 'POST', body: JSON.stringify(body) });
+        const input = simulationInput(await request.json());
+        if (input.error) return json({error:input.error},input.status);
+        return crowdRequest(env, '/simulation', { method:'POST',body:JSON.stringify(input.value) });
       } catch (error) {
         return json({ error: error.message }, 400);
       }
