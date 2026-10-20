@@ -146,7 +146,11 @@ function outdoor(id,student,minute) {
   const map=getCampusSimulation(id),sports=map.areas.filter(area=>area.kind==='sport');
   if(unit(`${student}:sport-or-road`)<map.sportShare){const area=weighted(sports,`${student}:sport`);return{...atArea(id,area,student),place:area.name,moving:false};}
   const road=map.roads[Math.floor(unit(`${student}:road`)*map.roads.length)].map(point);
-  const cycle=(minute/120+unit(`${student}:walk-phase`)*2)%2;
+  // Traverse the existing safe polyline and turn back without rerolling a
+  // person or cutting across a lake/building. A 24-minute round trip divides
+  // 1440 exactly and therefore preserves the same phase across midnight.
+  // This is an illustrative movement rate, not a surveyed walking speed.
+  const cycle=(minute/12+unit(`${student}:walk-phase`)*2)%2;
   return{...along(road,cycle<=1?cycle:2-cycle),place:'校区道路',moving:true};
 }
 export function generateCampusRoutine({schoolId='csuft',count,seed='weekday',timeMinutes=shanghaiTimeMinutes()}={}) {

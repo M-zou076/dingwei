@@ -5,7 +5,10 @@ import { generateCampusRoutine, randomCampusPoint as randomMapPoint, pointNearCa
 const ACTIVE_MS = 3 * 60 * 1000;
 const MAX_ACCURACY_METERS = 80;
 const MIN_DOT_GROUP = 3;
-const API_REVISION = '2.8.0';
+const API_REVISION = '2.8.1';
+// Share one authoritative frame between concurrent clients, without freezing
+// an entire minute of simulated walking. Real-only snapshots keep their TTL.
+const MOTION_FRAME_MS = 2000;
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -211,14 +214,14 @@ export class CrowdHub {
   }
 
   async snapshotFor(school) {
-    const now = Date.now(), minute = Math.floor(now / 60000);
+    const now = Date.now(), frame = Math.floor(now / MOTION_FRAME_MS);
     const version = this.snapshotVersions.get(school.id) || 0;
     const cached = this.snapshots.get(school.id);
     if (cached && cached.version === version && cached.expiresAt > now) return cached;
     const pending = this.pendingSnapshots.get(school.id);
-    if (pending && pending.version === version && pending.minute === minute) return pending.promise;
+    if (pending && pending.version === version && pending.frame === frame) return pending.promise;
 
-    const task = { version, minute };
+    const task = { version, frame };
     task.promise = this.buildSnapshot(school).finally(() => {
       if (this.pendingSnapshots.get(school.id) === task) this.pendingSnapshots.delete(school.id);
     });
@@ -245,7 +248,7 @@ export class CrowdHub {
       };
       const snapshot = {
         version, expiresAt: Math.min((Math.floor(now / 60000) + 1) * 60000, realExpiry,
-          payload.simulation && payload.simulation.mode !== 'routine' ? (Math.floor(now / 30000) + 1) * 30000 : Infinity),
+          payload.simulation?.count > 0 ? (Math.floor(now / MOTION_FRAME_MS) + 1) * MOTION_FRAME_MS : Infinity),
         body: JSON.stringify(crowd), summaryBody: JSON.stringify(summary)
       };
       this.snapshots.set(school.id, snapshot);
@@ -333,6 +336,48 @@ function hashUnit(text) {
   return (hash >>> 0) / 4294967295;
 }
 
+function simulationMinutes(simulation, now) {
+  if (simulation.timeMode !== 'manual') return shanghaiTimeMinutes(now);
+  // A selected time is the playback starting time, not a permanently frozen
+  // frame. Both browser and phone receive the same server-derived clock.
+  const start = Number(simulation.startedAt);
+  const elapsed = Number.isFinite(start) ? Math.max(0, now - start) / 60000 : 0;
+  return ((Number(simulation.timeMinutes || 0) + elapsed) % 1440 + 1440) % 1440;
+}
+
+function motionSegmentInside(school, a, b) {
+  const steps = Math.max(2, Math.ceil(Math.hypot(a.x-b.x,a.y-b.y)/.001));
+  for (let step=0;step<=steps;step++) {
+    const x=a.x+(b.x-a.x)*step/steps,y=a.y+(b.y-a.y)*step/steps;
+    if (!insideCampusMap(school.id,x,y) || school.id==='csuft' && (x<.15||x>.9||y<.06||y>.79)) return false;
+  }
+  return true;
+}
+
+function localSimulationWalk(school, anchor, salt, now) {
+  // Distribution-preview modes retain a stable neighbourhood for each person
+  // instead of rerolling everybody across campus every thirty seconds. Close
+  // waypoints have continuous positions, individual phases and safe segments.
+  const duration=24000+hashUnit(`${salt}:pace`)*16000;
+  const position=now/duration+hashUnit(`${salt}:phase`),step=Math.floor(position),progress=position-step;
+  function waypoint(index) {
+    for(let attempt=0;attempt<8;attempt++) {
+      const angle=hashUnit(`${salt}:${index}:${attempt}:direction`)*Math.PI*2;
+      const radius=.002+hashUnit(`${salt}:${index}:${attempt}:distance`)*.004;
+      const candidate={x:anchor.x+Math.cos(angle)*radius,y:anchor.y+Math.sin(angle)*radius};
+      if(motionSegmentInside(school,anchor,candidate))return candidate;
+    }
+    return anchor;
+  }
+  const from=waypoint(step),to=waypoint(step+1);
+  const t=progress*progress*(3-2*progress);
+  if(motionSegmentInside(school,from,to))return{x:from.x+(to.x-from.x)*t,y:from.y+(to.y-from.y)*t};
+  // If an exclusion lies between the waypoints, return through the known-safe
+  // anchor rather than interpolating across a lake, legend or campus boundary.
+  const a=t<.5?from:anchor,b=t<.5?anchor:to,u=t<.5?t*2:(t-.5)*2;
+  return{x:a.x+(b.x-a.x)*u,y:a.y+(b.y-a.y)*u};
+}
+
 function buildCrowd(school, payload, now = Date.now()) {
   // Uncalibrated illustrated campuses can never consume real GPS/image reports,
   // including stale records from an older configuration in durable storage.
@@ -340,29 +385,30 @@ function buildCrowd(school, payload, now = Date.now()) {
   const simulation = payload.simulation;
   let routine = null;
   if (simulation && simulation.count > 0 && simulation.mode === 'routine') {
-    const timeMinutes = simulation.timeMode === 'manual' ? simulation.timeMinutes : shanghaiTimeMinutes(now);
+    const timeMinutes = simulationMinutes(simulation, now);
     const generated = generateCampusRoutine({ schoolId:school.id, count: simulation.count, seed: simulation.seed, timeMinutes });
     routine = generated.summary;
     for (const person of generated.points) reports.push({ anonymousId: person.id, imageX: person.x, imageY: person.y, simulated: true });
   } else if (simulation && simulation.count > 0) {
-    const minute = Math.floor(now / 30000);
     const hotspots = school.id === 'csuft' ? [
       [.30, .48, .045, .038], [.54, .47, .065, .045],
       [.76, .34, .045, .050], [.43, .67, .055, .045],
       [.75, .61, .055, .040]
     ] : getCampusSimulation(school.id).areas.filter(area=>area.category!=='outdoor').map(area=>[area.x,area.y,area.rx,area.ry]);
     for (let index = 0; index < simulation.count; index++) {
-      const pick = hashUnit(`${simulation.seed}:${minute}:${index}:pick`);
+      const salt=`${simulation.seed}:${index}`;
+      const pick = hashUnit(`${salt}:pick`);
       let point;
       if (simulation.mode === 'point' && pick >= .35) {
-        point = pointNearCampus(school.id,`${simulation.seed}:${minute}:${index}`,{x:simulation.centerX,y:simulation.centerY},.055,.045);
+        point = pointNearCampus(school.id,salt,{x:simulation.centerX,y:simulation.centerY},.055,.045);
       } else if (simulation.mode === 'clusters' && pick >= .35) {
-        const choice = hashUnit(`${simulation.seed}:${minute}:${index}:hotspot`);
+        const choice = hashUnit(`${salt}:hotspot`);
         const center = hotspots[Math.min(hotspots.length - 1, Math.floor(choice * hotspots.length))];
-        point = pointNearCampus(school.id,`${simulation.seed}:${minute}:${index}`,{x:center[0],y:center[1]},center[2],center[3]);
+        point = pointNearCampus(school.id,salt,{x:center[0],y:center[1]},center[2],center[3]);
       } else {
-        point = randomMapPoint(school.id,`${simulation.seed}:${minute}:${index}`);
+        point = randomMapPoint(school.id,salt);
       }
+      point = localSimulationWalk(school,point,salt,now);
       const { x, y } = point;
       reports.push({
         anonymousId: `sim-${index}`,
@@ -378,7 +424,10 @@ function buildCrowd(school, payload, now = Date.now()) {
     const point = entry.simulated && Number.isFinite(entry.imageX) && Number.isFinite(entry.imageY)
       ? { x: entry.imageX, y: entry.imageY, inside: true } : reportPoint(school, entry);
     if (!point.inside || entry.simulated && school.id !== 'csuft' && !insideCampusMap(school.id,point.x,point.y)) continue;
-    if (entry.simulated) dots.push({ x: Math.round(point.x * 10000) / 10000, y: Math.round(point.y * 10000) / 10000 });
+    // Stable identifiers belong ONLY to synthetic students. Never expose a
+    // real phone's anonymousId or infer identity for privacy-jittered real dots.
+    if (entry.simulated) dots.push({ id:`sim-${Number(simulation.startedAt||0).toString(36)}-${dots.length}`,
+      x: Math.round(point.x * 10000) / 10000, y: Math.round(point.y * 10000) / 10000 });
     const col = Math.min(cfg.columns - 1, Math.floor(point.x * cfg.columns));
     const row = Math.min(cfg.rows - 1, Math.floor(point.y * cfg.rows));
     const key = `${col}:${row}`;

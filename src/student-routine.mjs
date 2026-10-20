@@ -214,7 +214,10 @@ function alongPath(path, progress) {
 function outdoorPoint(student, minute) {
   const route = unit(`${student}:outdoor-zone`) < .45 ? [1,2,3,4,5,6,1] : [10,11,13,14,15,10];
   const path = route.map(index => ({ x: NODES[index][0], y: NODES[index][1] }));
-  const progress = (minute / 120 + unit(`${student}:walking-phase`)) % 1;
+  // A visible illustrative stroll, not a measured walking speed. Sixteen
+  // minutes divides a full day exactly, so wrapping the clock at midnight
+  // cannot jump a person to a different point on this closed corridor loop.
+  const progress = (minute / 16 + unit(`${student}:walking-phase`)) % 1;
   const point = alongPath(path, progress);
   return { x: point.x + (unit(`${student}:lane-x`) - .5) * .005, y: point.y + (unit(`${student}:lane-y`) - .5) * .005 };
 }
