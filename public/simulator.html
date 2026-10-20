@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="application-version" content="2.8.0">
-  <title>校园人流模拟后台 · 2.8</title>
+  <meta name="application-version" content="2.8.1">
+  <title>校园人流模拟后台 · 2.8.1</title>
   <style>
     :root{--ink:#12372d;--green:#08775a;--lime:#c8ef76;--paper:#f3f7f3;--line:#d9e5df}
     *{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;background:var(--paper);color:var(--ink);font-family:system-ui,"Microsoft YaHei",sans-serif}
@@ -23,7 +23,7 @@
   </style>
 </head>
 <body>
-  <header><h1>校园人流模拟后台</h1><p>v2.8 · 按学校和校区独立控制；使用各校区自己的内置校园图。</p></header>
+  <header><h1>校园人流模拟后台</h1><p>v2.8.1 · 按学校和校区独立控制；使用各校区自己的内置校园图。</p></header>
   <main>
     <section class="card">
       <div class="map-title"><h2>模拟参数</h2><button id="reloadSchools" class="reload">重新读取校区</button></div>
@@ -36,14 +36,14 @@
         <p class="note" id="patternNote">热点之外仍保留背景散布，不会把全员塞进一个区域。</p>
         <div id="routineControls">
           <label for="timeMode">模拟时间（北京时间）</label>
-          <div class="time-controls"><select id="timeMode"><option value="auto">跟随当前时间</option><option value="manual">手动选择时段</option></select><input id="simTime" type="time" value="09:00" disabled aria-label="手动模拟时间"></div>
+          <div class="time-controls"><select id="timeMode"><option value="auto">跟随当前北京时间</option><option value="manual">从所选时刻播放</option></select><input id="simTime" type="time" value="09:00" disabled aria-label="模拟播放起始时间"></div>
           <div class="presets" aria-label="快捷时段"><button data-time="09:00">上午上课</button><button data-time="12:30">午餐</button><button data-time="13:15">午休</button><button data-time="15:00">下午上课</button><button data-time="18:30">晚餐</button><button data-time="20:00">晚课／自习</button><button data-time="22:30">夜间休息</button></div>
           <div class="period" id="period"><strong>工作日作息假设</strong>8–12、14–18 点以教学区为主；12–14、18–19 点转向食堂与宿舍；夜间保留自习和宿舍人流。</div>
         </div>
       </fieldset>
       <div class="buttons"><button class="start" id="start" disabled>启动 / 更新本校区</button><button class="stop" id="stop" disabled>停止并清空本校区</button></div>
       <div class="status" id="status" role="status" aria-live="polite">正在读取学校与校区配置…</div>
-      <p class="note">1–10000 人。不同校区的启动、停止、人数、分布方式和时间互不影响。修改参数后需点“启动／更新”；切换校区不会停止其他校区，关闭网页也不会停止模拟。上课、就餐与休息比例是模拟假设，不代表真实课表。</p>
+      <p class="note">1–10000 人。不同校区的启动、停止、人数、分布方式和时间互不影响。修改参数后需点“启动／更新”；手动时间会从所选时刻继续播放，自动时间跟随北京时间。切换校区或关闭网页不会停止其他校区。位置每 5 秒读取，模拟人物平滑衔接后台快照；不追踪真实用户。作息比例为模拟假设，不代表真实课表。</p>
     </section>
     <section class="card">
       <div class="map-title"><h2>模拟结果预览</h2><span class="badge" id="active">尚未选择校区</span></div>
@@ -63,6 +63,8 @@
     const drafts = new Map(), lastCampusByUniversity = new Map(), pendingCommands = new Map();
     let schools = [], selectedSchoolId = '', selectionEpoch = 0, catalogSequence = 0, refreshSequence = 0;
     let refreshing = null, imageReady = false, currentImage = null, latestData = null;
+    const POLL_MS=5000, FRAME_MS=1000/30;
+    let animationState=null, animationFrame=0, animationGeneration=0, lastPaintAt=-Infinity, viewport=null;
     const requestedSchoolId = new URLSearchParams(window.location.search).get('schoolId') || '';
 
     function currentSchool() { return schools.find(function (school) { return school.id === selectedSchoolId; }) || null; }
@@ -145,8 +147,77 @@
         const canvas = $(selector); canvas.getContext('2d').clearRect(0,0,canvas.width,canvas.height);
       }
     }
+    function clearAnimation() {
+      ++animationGeneration;
+      if (animationFrame) cancelAnimationFrame(animationFrame);
+      animationFrame=0; animationState=null; lastPaintAt=-Infinity;
+    }
+    function validDot(dot) { return dot && Number.isFinite(dot.x) && Number.isFinite(dot.y) && dot.x>=0 && dot.x<=1 && dot.y>=0 && dot.y<=1; }
+    function stableId(dot) { return typeof dot.id==='string' && dot.id.length>0 && dot.id.length<=160 ? dot.id : null; }
+    function interpolationSafe(school,from,to) {
+      const dx=to.x-from.x,dy=to.y-from.y;
+      if (dx*dx+dy*dy>.08*.08 || !insideCampus(school,from.x,from.y) || !insideCampus(school,to.x,to.y)) return false;
+      // Check every interval cut by a campus/exclusion edge. Sampling only a few
+      // pixels can miss a thin lake, construction zone or concave campus gap.
+      const cuts=[0,1], config=school.simulationConfig;
+      for (const polygon of config.polygons.concat(config.excludedPolygons || [])) for(let i=0,j=polygon.length-1;i<polygon.length;j=i++) {
+        const a=polygon[j],b=polygon[i],ex=b[0]-a[0],ey=b[1]-a[1],den=dx*ey-dy*ex;
+        if (Math.abs(den)<1e-12) continue;
+        const ax=a[0]-from.x,ay=a[1]-from.y,t=(ax*ey-ay*ex)/den,u=(ax*dy-ay*dx)/den;
+        if (t>=0 && t<=1 && u>=0 && u<=1) cuts.push(t);
+      }
+      cuts.sort(function(a,b){return a-b;});
+      for(let i=0;i<cuts.length;i++) {
+        const t=cuts[i]; if(!insideCampus(school,from.x+dx*t,from.y+dy*t)) return false;
+        if(i && !insideCampus(school,from.x+dx*(cuts[i-1]+t)/2,from.y+dy*(cuts[i-1]+t)/2)) return false;
+      }
+      return true;
+    }
+    function animationProgress(now) { return animationState ? Math.max(0,Math.min(1,(now-animationState.startedAt)/animationState.duration)) : 1; }
+    function stageAnimation(data) {
+      const now=performance.now(),school=currentSchool(),previous=animationState,progress=animationProgress(now),old=new Map();
+      const sameSession=previous && previous.schoolId===selectedSchoolId && previous.epoch===selectionEpoch
+        && previous.session===(data.simulation || {}).startedAt;
+      if(sameSession) for(const entry of previous.entries) if(entry.id) old.set(entry.id,{x:entry.fromX+(entry.x-entry.fromX)*progress,y:entry.fromY+(entry.y-entry.fromY)*progress});
+      clearAnimation();
+      const running=!!(data.simulation || {}).running,dots=(Array.isArray(data.dots)?data.dots:[]).filter(validDot),frequencies=new Map();
+      if(running) for(const dot of dots) { const id=stableId(dot); if(id) frequencies.set(id,(frequencies.get(id)||0)+1); }
+      let moving=false;
+      const entries=dots.map(function(dot){
+        // Only server-issued, unique simulated IDs can be matched. Anonymous
+        // real points have no ID and are replaced, never linked into tracks.
+        const candidate=running?stableId(dot):null,id=candidate && frequencies.get(candidate)===1?candidate:null,from=id?old.get(id):null;
+        const interpolate=!!from && (Math.abs(from.x-dot.x)>1e-8 || Math.abs(from.y-dot.y)>1e-8) && interpolationSafe(school,from,dot);
+        moving=moving || interpolate;
+        return{id:id,x:dot.x,y:dot.y,fromX:interpolate?from.x:dot.x,fromY:interpolate?from.y:dot.y};
+      });
+      animationState={schoolId:selectedSchoolId,epoch:selectionEpoch,session:(data.simulation || {}).startedAt,startedAt:now,duration:POLL_MS,entries:entries,moving:moving};
+      if(moving && imageReady) scheduleAnimation();
+    }
+    function drawAnimatedDots(now) {
+      if(!imageReady || !viewport || !animationState || !currentMatches(animationState.schoolId,animationState.epoch)) return;
+      const canvas=$('#peopleDots'),ctx=canvas.getContext('2d'),progress=animationProgress(now),entries=animationState.entries;
+      ctx.setTransform(1,0,0,1,0,0); ctx.clearRect(0,0,canvas.width,canvas.height); ctx.setTransform(viewport.ratio,0,0,viewport.ratio,0,0);
+      ctx.fillStyle='rgba(211,39,50,.62)'; const radius=entries.length>3000?1:1.65;ctx.beginPath();
+      for(const dot of entries) { const x=dot.fromX+(dot.x-dot.fromX)*progress,y=dot.fromY+(dot.y-dot.fromY)*progress;
+        ctx.moveTo(x*viewport.width+radius,y*viewport.height);ctx.arc(x*viewport.width,y*viewport.height,radius,0,Math.PI*2); }
+      ctx.fill();
+    }
+    function scheduleAnimation() {
+      if(animationFrame || !animationState || !animationState.moving || !imageReady) return;
+      const generation=animationGeneration;
+      function tick(now) {
+        if(generation!==animationGeneration) return;
+        animationFrame=0;
+        if(!imageReady || !animationState || !currentMatches(animationState.schoolId,animationState.epoch)) return;
+        const finished=animationProgress(now)>=1;
+        if(now-lastPaintAt>=FRAME_MS-1 || finished) { drawAnimatedDots(now);lastPaintAt=now; }
+        if(!finished) animationFrame=requestAnimationFrame(tick);
+      }
+      animationFrame=requestAnimationFrame(tick);
+    }
     function clearPreview(message) {
-      latestData = null; imageReady = false; currentImage = null; clearCanvas();
+      clearAnimation(); latestData = null; imageReady = false; currentImage = null; viewport=null; clearCanvas();
       $('#imageLayer').replaceChildren(); $('#mapMessage').hidden = false; $('#mapMessage').textContent = message;
       $('#map').className = ''; $('#map').setAttribute('aria-busy','true'); target.hidden = true;
       $('#routineCounts').replaceChildren(); $('#routineCounts').hidden = true;
@@ -156,11 +227,12 @@
       if (!imageReady || !latestData || latestData.schoolId !== selectedSchoolId) return;
       const data = latestData, rect = map.getBoundingClientRect(), ratio = Math.min(3,window.devicePixelRatio || 1);
       if (!rect.width || !rect.height) return;
+      viewport={width:rect.width,height:rect.height,ratio:ratio};
       for (const selector of ['#density','#peopleDots']) { const canvas = $(selector); canvas.width = Math.round(rect.width*ratio); canvas.height = Math.round(rect.height*ratio); }
       const grids = Array.isArray(data.grids) ? data.grids : [], dots = Array.isArray(data.dots) ? data.dots : [];
       const validGrids = grids.filter(function (grid) { return [grid.x,grid.y,grid.width,grid.height,grid.count].every(Number.isFinite) && grid.count > 0 && grid.width > 0 && grid.height > 0; });
       const maxCount = validGrids.reduce(function (max,grid) { return Math.max(max,grid.count); },0);
-      const heat = $('#density').getContext('2d'); heat.scale(ratio,ratio);
+      const heat = $('#density').getContext('2d'); heat.setTransform(1,0,0,1,0,0);heat.clearRect(0,0,$('#density').width,$('#density').height);heat.setTransform(ratio,0,0,ratio,0,0);
       for (const grid of validGrids) {
         if (grid.count < 2) continue;
         const strength = grid.count/Math.max(1,maxCount), x=(grid.x+grid.width/2)*rect.width, y=(grid.y+grid.height/2)*rect.height;
@@ -171,11 +243,7 @@
         gradient.addColorStop(.55,'rgba('+color+','+(.05+.11*strength).toFixed(2)+')'); gradient.addColorStop(1,'rgba('+color+',0)');
         heat.fillStyle=gradient; heat.beginPath(); heat.arc(x,y,radius,0,Math.PI*2); heat.fill();
       }
-      const ctx = $('#peopleDots').getContext('2d'); ctx.scale(ratio,ratio); ctx.fillStyle='rgba(211,39,50,.62)';
-      const radius = dots.length>3000?1:1.65;
-      for (const dot of dots) if (Number.isFinite(dot.x) && Number.isFinite(dot.y) && dot.x>=0 && dot.x<=1 && dot.y>=0 && dot.y<=1) {
-        ctx.beginPath(); ctx.arc(dot.x*rect.width,dot.y*rect.height,radius,0,Math.PI*2); ctx.fill();
-      }
+      drawAnimatedDots(performance.now());scheduleAnimation();
       $('#densitySummary').textContent = dots.length ? '当前校区展示 '+dots.length+' 个匿名／模拟位置；最密局部约 '+maxCount+' 人。颜色为相对密度，热点外仍有零散人流。' : '当前校区暂无可显示的人流位置';
     }
     function makeOption(value, text) { const option=document.createElement('option'); option.value=value; option.textContent=text; return option; }
@@ -206,11 +274,12 @@
         if (!img.naturalWidth || !img.naturalHeight) { img.onerror(); return; }
         imageReady=true; map.style.aspectRatio=img.naturalWidth+' / '+img.naturalHeight;
         map.className='ready'; map.setAttribute('aria-busy','false'); $('#mapMessage').hidden=true;
+        if(latestData && latestData.schoolId===id) stageAnimation(latestData);
         updateControls(); renderLastData();
       };
       img.onerror=function () {
         if (!currentMatches(id,epoch) || currentImage!==img) return;
-        imageReady=false; clearCanvas(); $('#mapMessage').hidden=false; $('#mapMessage').textContent='本校区地图加载失败，请检查该校区图片是否已部署；不会显示其他学校的地图。';
+        imageReady=false; clearAnimation();clearCanvas(); $('#mapMessage').hidden=false; $('#mapMessage').textContent='本校区地图加载失败，请检查该校区图片是否已部署；不会显示其他学校的地图。';
         status('当前校区内置图未能加载，暂不能启动；仍可停止本校区已有模拟。','error'); updateControls();
       };
       $('#imageLayer').replaceChildren(img); img.src=mapUrl(school); refresh();
@@ -265,21 +334,25 @@
       status(simulation.running?'本校区运行中：'+simulation.count+' 人 · '+(modeLabels[simulation.mode] || simulation.mode)+(routine?' · '+routine.timeLabel:'')+dirty:'本校区模拟已停止'+dirty,simulation.running?'running':'');
       const counts=$('#routineCounts'); counts.replaceChildren(); counts.hidden=!routine;
       if (routine) {
-        const title=document.createElement('strong'); title.textContent=routine.timeLabel+' · '+routine.label;
-        $('#period').replaceChildren(title,document.createTextNode('依据本校区建筑与道路逐步移动，热点外也保留学生。'));
+        const title=document.createElement('strong'); title.textContent='后台播放 '+routine.timeLabel+' · '+routine.label;
+        $('#period').replaceChildren(title,document.createTextNode((simulation.timeMode==='manual'?'从所选时刻持续播放':'跟随当前北京时间')+'；依据本校区建筑与道路逐步移动，热点外也保留学生。'));
         for (const entry of Object.entries(categoryLabels)) { const card=document.createElement('div'),number=document.createElement('b'); number.textContent=((routine.counts || {})[entry[0]] || 0)+' 人'; card.append(document.createTextNode(entry[1]),number); counts.append(card); }
       }
       if (school && !imageReady && currentImage && currentImage.complete && !currentImage.naturalWidth) status('当前校区图片加载失败，不能启动新模拟。','error');
     }
-    async function refresh() {
+    async function refresh(force) {
       const school=currentSchool(), id=selectedSchoolId, epoch=selectionEpoch;
-      if (!supported(school) || refreshing && refreshing.id===id && refreshing.epoch===epoch) return;
+      if (!supported(school) || pendingCommands.has(id) && force!==true || refreshing && refreshing.id===id && refreshing.epoch===epoch) return;
       const controller=new AbortController(), sequence=++refreshSequence; refreshing={id:id,epoch:epoch,sequence:sequence,controller:controller};
       try {
         const data=await api('/api/v1/crowd?schoolId='+encodeURIComponent(id),{signal:controller.signal});
         if (!currentMatches(id,epoch) || !refreshing || refreshing.sequence!==sequence) return;
         if (data.schoolId!==id || data.simulation && data.simulation.schoolId && data.simulation.schoolId!==id) throw new Error('返回的人流不属于当前校区，已拒绝显示');
-        latestData=data; showCloudState(data); renderLastData();
+        if(latestData && Number.isFinite(latestData.generatedAt) && Number.isFinite(data.generatedAt) && data.generatedAt<latestData.generatedAt) return;
+        const sameSnapshot=latestData && animationState && (data.simulation || {}).running && Number.isFinite(data.generatedAt) && data.generatedAt===latestData.generatedAt;
+        latestData=data; showCloudState(data);
+        if(imageReady && !sameSnapshot) stageAnimation(data);
+        renderLastData();
       } catch (error) { if (currentMatches(id,epoch) && refreshing && refreshing.sequence===sequence) status('本校区云端读取失败：'+(error.name==='AbortError'?'连接超时':error.message),'error'); }
       finally { if (refreshing && refreshing.sequence===sequence) refreshing=null; }
     }
@@ -293,13 +366,16 @@
       if (action!=='stop' && draft.timeMode==='manual' && (!Number.isInteger(hour) || !Number.isInteger(minute) || hour<0 || hour>23 || minute<0 || minute>59)) { status('请选择有效的北京时间','error'); return; }
       if (action!=='stop' && draft.mode==='point' && !insideCampus(school,draft.centerX,draft.centerY)) { status('请在当前校园有效区域内点选聚集中心。','error'); return; }
       const body=action==='stop'?{action:'stop',schoolId:id}:{action:'start',schoolId:id,count:count,mode:draft.mode,timeMode:draft.timeMode,timeMinutes:Number.isInteger(hour)&&Number.isInteger(minute)?hour*60+minute:0,centerX:draft.centerX===null?.5:draft.centerX,centerY:draft.centerY===null?.5:draft.centerY,seed:'weekday-campus:'+id};
-      const token={}; pendingCommands.set(id,token); updateControls(); status('正在'+(action==='stop'?'停止':'更新')+' '+schoolLabel(school)+'…');
+      const token={}; pendingCommands.set(id,token);
+      if(refreshing) { refreshing.controller.abort();refreshing=null; }
+      clearAnimation();latestData=null;clearCanvas();
+      updateControls(); status('正在'+(action==='stop'?'停止':'更新')+' '+schoolLabel(school)+'…');
       try {
         const result=await api('/api/v1/simulation',{method:'POST',body:body});
         if (result.schoolId && result.schoolId!==id) throw new Error('操作返回了其他校区，已拒绝应用');
         if (!currentMatches(id,epoch)) return;
         draft.dirty=false; if (refreshing) { refreshing.controller.abort(); refreshing=null; }
-        await refresh();
+        await refresh(true);
       } catch (error) { if (currentMatches(id,epoch)) status('本校区操作失败：'+(error.name==='AbortError'?'连接超时':error.message),'error'); }
       finally { if (pendingCommands.get(id)===token) pendingCommands.delete(id); if (currentMatches(id,epoch)) updateControls(); }
     }
@@ -307,7 +383,7 @@
     $('#university').onchange=function () { captureDraft(false); const universityId=this.value; selectSchool(populateCampuses(universityId,lastCampusByUniversity.get(universityId))); };
     $('#campus').onchange=function () { selectSchool(this.value); };
     for (const selector of ['#count','#mode','#timeMode','#simTime']) $(selector).oninput=$(selector).onchange=function () { captureDraft(true); $('#countOut').value=$('#count').value; updateControls(); };
-    for (const button of document.querySelectorAll('[data-time]')) button.onclick=function () { $('#mode').value='routine'; $('#timeMode').value='manual'; $('#simTime').value=button.dataset.time; captureDraft(true); updateControls(); status('已选北京时间 '+button.dataset.time+'，请点击“启动／更新本校区”。'); };
+    for (const button of document.querySelectorAll('[data-time]')) button.onclick=function () { $('#mode').value='routine'; $('#timeMode').value='manual'; $('#simTime').value=button.dataset.time; captureDraft(true); updateControls(); status('已选起始时刻 '+button.dataset.time+'，点击“启动／更新本校区”后从该时刻播放。'); };
     map.onclick=function (event) {
       const school=currentSchool(); if (!supported(school) || !imageReady || pendingCommands.has(selectedSchoolId)) return;
       const rect=map.getBoundingClientRect(),x=(event.clientX-rect.left)/rect.width,y=(event.clientY-rect.top)/rect.height;
@@ -318,7 +394,7 @@
     $('#reloadSchools').onclick=loadSchools;
     window.addEventListener('resize',renderLastData);
     if (typeof ResizeObserver==='function') new ResizeObserver(renderLastData).observe(map);
-    loadSchools(); setInterval(refresh,5000);
+    loadSchools(); setInterval(refresh,POLL_MS);
   </script>
 </body>
 </html>
