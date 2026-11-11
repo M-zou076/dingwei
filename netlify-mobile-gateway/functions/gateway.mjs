@@ -1,7 +1,7 @@
 // Generated from the tested fixed-upstream gateway. No dependencies or credentials.
 const gateway = (() => {
 const UPSTREAM_ORIGIN = 'https://dingwei.3531679736.workers.dev';
-const GATEWAY_REVISION = '2.8.0';
+const GATEWAY_REVISION = '3.0.1-preview';
 const MAX_JSON_BYTES = 32 * 1024;
 const UPSTREAM_TIMEOUT_MS = 10000;
 const SCHOOL_MAP_PATHS = new Map([
@@ -26,11 +26,36 @@ const ROUTES = new Map([
   ['/index.html', { method: 'GET', query: [] }]
 ]);
 
+const PLATFORM_ROUTES = new Map([
+  ['/api/v4/universities',{methods:['GET'],query:['q','province','limit','cursor']}],
+  ['/api/v4/campuses',{methods:['GET','POST'],query:['universityId']}],
+  ['/api/v4/auth/register',{methods:['POST'],query:[]}],
+  ['/api/v4/auth/login',{methods:['POST'],query:[]}],
+  ['/api/v4/auth/me',{methods:['GET'],query:[]}],
+  ['/api/v4/auth/logout',{methods:['POST'],query:[]}],
+  ['/api/v4/maps',{methods:['GET'],query:['campusId']}],
+  ['/api/v4/maps/select',{methods:['POST'],query:[]}],
+  ['/api/v4/map-versions',{methods:['POST'],query:[]}],
+  ['/api/v4/admin/grants',{methods:['GET','POST'],query:[]}],
+  ['/api/v4/admin/audit',{methods:['GET'],query:['campusId']}],
+  ['/api/v4/analysis',{methods:['GET'],query:['campusId']}],
+  ['/api/v4/assistant',{methods:['POST'],query:[]}],
+  ['/api/v1/simulation',{methods:['POST'],query:[]}],
+  ...['/campus.html','/campus.css','/campus-app.js','/map-calibration.mjs','/map-projection.mjs','/review-actions.mjs','/simulator','/simulator.html'].map(path=>[path,{methods:['GET'],query:['v','campusId','schoolId','universityId']}])
+]);
+function platformRoute(path) {
+  if(PLATFORM_ROUTES.has(path))return PLATFORM_ROUTES.get(path);
+  if(/^\/api\/v4\/map-versions\/v-[a-z0-9-]{36}$/.test(path))return{methods:['GET'],query:[]};
+  if(/^\/api\/v4\/map-versions\/v-[a-z0-9-]{36}\/file$/.test(path))return{methods:['GET','PUT'],query:[],binary:true};
+  if(/^\/api\/v4\/map-versions\/v-[a-z0-9-]{36}\/(submit|review|publish|withdraw|recommend)$/.test(path))return{methods:['POST'],query:[]};
+  return null;
+}
+
 function publicHeaders(extra = {}) {
   return new Headers({
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Methods': 'GET,POST,PUT,OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type,Authorization',
     'Cache-Control': 'no-store',
     'X-Content-Type-Options': 'nosniff',
     ...extra
@@ -106,20 +131,21 @@ function authorizeAnonymousWrite(body) {
   }
 }
 
-async function upstreamRequest(url, method, body) {
+async function upstreamRequest(url, method, body, forwarded = {}) {
   const controller = new AbortController();
   let timer;
   const timedOut = new Promise((_, reject) => {
     timer = setTimeout(() => {
       controller.abort();
       reject(new GatewayError('连接人流上游服务超时，请稍后重试'));
-    }, UPSTREAM_TIMEOUT_MS);
+    }, new URL(url).pathname==='/api/v4/assistant'?30000:UPSTREAM_TIMEOUT_MS);
   });
   try {
     return await Promise.race([
       (async () => {
         const headers = new Headers({ Accept: 'application/json, text/html, image/jpeg' });
-        if (body !== undefined) headers.set('Content-Type', 'application/json');
+        if (body !== undefined) headers.set('Content-Type', forwarded.contentType || 'application/json');
+        if(forwarded.authorization)headers.set('Authorization',forwarded.authorization);
         const response = await fetch(url, {
           method, headers, body, signal: controller.signal, redirect: 'manual'
         });
@@ -142,7 +168,7 @@ async function upstreamRequest(url, method, body) {
 
 function relay({ response, bytes }) {
   const headers = publicHeaders();
-  for (const name of ['Content-Type', 'ETag', 'Last-Modified']) {
+  for (const name of ['Content-Type', 'ETag', 'Last-Modified','Content-Security-Policy','Permissions-Policy','Referrer-Policy','X-Frame-Options']) {
     const value = response.headers.get(name);
     if (value) headers.set(name, value);
   }
@@ -193,6 +219,9 @@ async function health() {
     return json({
       ok: true, service: 'campus-mobile-gateway', upstreamConnected: true,
       revision: upstream.revision ?? null, gatewayRevision: GATEWAY_REVISION, time: Date.now()
+      , platformRevision:upstream.platformRevision??null, accountServiceConfigured:upstream.accountServiceConfigured===true,
+      accountRegistrationReady:upstream.accountRegistrationReady===true,mapStorageConfigured:upstream.mapStorageConfigured===true,
+      modelConfigured:upstream.modelConfigured===true
     });
   } catch (error) {
     return json({
@@ -206,7 +235,7 @@ function landing() {
   return new Response(`<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>校园人流服务入口</title>
 <style>body{font-family:system-ui,sans-serif;max-width:640px;margin:60px auto;padding:0 24px;line-height:1.8;color:#13463c;background:#f5faf7}a{display:inline-block;margin:8px 12px 8px 0;padding:12px 20px;background:#075443;color:white;border-radius:12px;text-decoration:none}small{color:#526963}</style></head>
-<body><h1>校园人流服务入口</h1><p>手机与电脑通过这个入口访问同一套校园人流数据，按所选校区读取校园图与人流。</p><p><a href="/health">检查手机连接状态</a><a href="${UPSTREAM_ORIGIN}/simulator?v=2.8">电脑模拟后台（原入口）</a></p><p>先检查连接状态：显示 <code>ok: true</code> 和 <code>upstreamConnected: true</code> 表示入口已连接人流服务。手机也能打开后，可将这个网站地址填入 App 的服务地址。</p><small>请在电脑原后台修改模拟人数和时段。本入口不开放模拟管理。湖南师范大学五个手绘校区仅展示模拟人流，不接收真实位置共享；每个校区独立读取，不混用其他校区数据。</small></body></html>`, {
+<body><h1>校园出行服务入口</h1><p>按所选学校和校区读取校园图、天气与可用人流依据。</p><p><a href="/campus.html">进入校园出行</a><a href="/simulator">模拟管理（需授权）</a><a href="/health">检查连接状态</a></p><p>全国高校检索、个人地图、投稿审核和出行分析在新版用户端使用；原手机地图功能保持兼容。</p><small>共享样本与作息模型分开显示。没有共享用户不代表校园无人；未配准的校园图不叠加真实 GPS。<a href="${UPSTREAM_ORIGIN}/simulator?v=2.8">原模拟入口</a></small></body></html>`, {
     headers: publicHeaders({ 'Content-Type': 'text/html; charset=utf-8' })
   });
 }
@@ -214,6 +243,29 @@ function landing() {
 return {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    const v3route=platformRoute(url.pathname);
+    if(v3route) {
+      if(/[%\\]/.test(url.pathname))return json({error:'接口不存在'},404);
+      if(url.search.length>2048||[...url.searchParams.keys()].some(key=>!v3route.query.includes(key)||url.searchParams.getAll(key).length>1))return json({error:'请求包含未允许的查询参数'},400);
+      if(request.method==='OPTIONS')return new Response(null,{status:204,headers:publicHeaders()});
+      if(!v3route.methods.includes(request.method))return json({error:'请求方法不允许'},405);
+      try {
+        const authorization=request.headers.get('authorization');
+        if(authorization&&!/^Bearer [A-Za-z0-9_-]{43}$/.test(authorization))return json({error:'登录凭证格式无效'},401);
+        if(url.pathname==='/api/v1/simulation'&&!authorization)return json({error:'请先在用户端登录具有本校区模拟权限的账号'},401);
+        // Bootstrap headers are never forwarded through the public gateway.
+        let body,contentType;
+        if(request.method==='PUT') {
+          contentType=(request.headers.get('content-type')||'').split(';')[0];
+          if(!['image/png','image/jpeg'].includes(contentType))return json({error:'仅支持PNG/JPEG'},415);
+          const reader=request.body?.getReader();if(!reader)return json({error:'图片为空'},400);
+          const chunks=[];let size=0;
+          try{for(;;){const {value,done}=await reader.read();if(done)break;size+=value.length;if(size>8*1024*1024){await reader.cancel();throw new GatewayError('图片不能超过8MB',413);}chunks.push(value);}}finally{reader.releaseLock();}
+          body=new Uint8Array(size);let offset=0;for(const chunk of chunks){body.set(chunk,offset);offset+=chunk.length;}
+        } else if(request.method==='POST') body=await requestJson(request);
+        return relay(await upstreamRequest(`${UPSTREAM_ORIGIN}${url.pathname}${url.search}`,request.method,body,{authorization,contentType}));
+      }catch(error){return json({error:error.message||'网关请求失败'},error.status||502);}
+    }
     const route = ROUTES.get(url.pathname);
     // The destination is always the fixed origin; arbitrary paths and encoded
     // separators are rejected before any upstream request is made.
@@ -281,5 +333,10 @@ export const config = {
     '/maps/hunnu-nanyuan.jpg', '/maps/hunnu-xianjiahu.jpg',
     '/maps/hunnu-erlb.jpg', '/maps/hunnu-taohuaping.jpg',
     '/maps/hunnu-zhanggongling.jpg'
+    , '/campus.html', '/campus.css', '/campus-app.js', '/simulator', '/simulator.html',
+    '/map-calibration.mjs', '/map-projection.mjs', '/review-actions.mjs',
+    '/api/v4/universities', '/api/v4/campuses', '/api/v4/auth/*',
+    '/api/v4/maps', '/api/v4/maps/*', '/api/v4/map-versions', '/api/v4/map-versions/*',
+    '/api/v4/admin/*', '/api/v4/analysis', '/api/v4/assistant', '/api/v1/simulation'
   ]
 };
