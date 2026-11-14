@@ -39,6 +39,7 @@ const PLATFORM_ROUTES = new Map([
   ['/api/v4/admin/grants',{methods:['GET','POST'],query:[]}],
   ['/api/v4/admin/audit',{methods:['GET'],query:['campusId']}],
   ['/api/v4/analysis',{methods:['GET'],query:['campusId']}],
+  ['/api/v4/timetable',{methods:['GET'],query:['campusId','week','weekday','period','mode']}],
   ['/api/v4/assistant',{methods:['POST'],query:[]}],
   ['/api/v1/simulation',{methods:['POST'],query:[]}],
   ...['/campus.html','/campus.css','/campus-app.js','/map-calibration.mjs','/map-projection.mjs','/review-actions.mjs','/simulator','/simulator.html'].map(path=>[path,{methods:['GET'],query:['v','campusId','schoolId','universityId']}])
@@ -337,6 +338,6 @@ export const config = {
     '/map-calibration.mjs', '/map-projection.mjs', '/review-actions.mjs',
     '/api/v4/universities', '/api/v4/campuses', '/api/v4/auth/*',
     '/api/v4/maps', '/api/v4/maps/*', '/api/v4/map-versions', '/api/v4/map-versions/*',
-    '/api/v4/admin/*', '/api/v4/analysis', '/api/v4/assistant', '/api/v1/simulation'
+    '/api/v4/admin/*', '/api/v4/analysis', '/api/v4/timetable', '/api/v4/assistant', '/api/v1/simulation'
   ]
 };
