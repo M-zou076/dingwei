@@ -41,7 +41,7 @@ const PLATFORM_ROUTES = new Map([
   ['/api/v4/analysis',{methods:['GET'],query:['campusId']}],
   ['/api/v4/timetable',{methods:['GET'],query:['campusId','week','weekday','period','mode']}],
   ['/api/v4/assistant',{methods:['POST'],query:[]}],
-  ['/api/v4/agent/places',{methods:['GET'],query:['campusId']}],
+  ['/api/v4/agent/places',{methods:['GET','POST'],query:['campusId']}],
   ['/api/v4/agent/route',{methods:['POST'],query:[]}],
   ['/api/v4/agent/route-image.png',{methods:['GET'],query:['data'],maxQueryLength:20520}],
   ['/api/v4/agent/route-view',{methods:['GET'],query:['data'],maxQueryLength:20520}],
@@ -268,7 +268,10 @@ return {
           try{for(;;){const {value,done}=await reader.read();if(done)break;size+=value.length;if(size>8*1024*1024){await reader.cancel();throw new GatewayError('图片不能超过8MB',413);}chunks.push(value);}}finally{reader.releaseLock();}
           body=new Uint8Array(size);let offset=0;for(const chunk of chunks){body.set(chunk,offset);offset+=chunk.length;}
         } else if(request.method==='POST') body=await requestJson(request);
-        const upstream=await upstreamRequest(`${UPSTREAM_ORIGIN}${url.pathname}${url.search}`,request.method,body,{authorization,contentType});
+        // AgentArts attaches an empty JSON body to GET tools; accept its POST
+        // compatibility call and translate this fixed read-only endpoint to GET.
+        const placesLookup=url.pathname==='/api/v4/agent/places';
+        const upstream=await upstreamRequest(`${UPSTREAM_ORIGIN}${url.pathname}${url.search}`,placesLookup?'GET':request.method,placesLookup?undefined:body,{authorization,contentType});
         if(url.pathname==='/api/v4/agent/route'&&upstream.response.ok){
           const result=parseUpstreamJson(upstream.bytes);
           for(const [key,path]of[['imageUrl','/api/v4/agent/route-image.png'],['viewUrl','/api/v4/agent/route-view']]){
