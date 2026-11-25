@@ -41,6 +41,10 @@ const PLATFORM_ROUTES = new Map([
   ['/api/v4/analysis',{methods:['GET'],query:['campusId']}],
   ['/api/v4/timetable',{methods:['GET'],query:['campusId','week','weekday','period','mode']}],
   ['/api/v4/assistant',{methods:['POST'],query:[]}],
+  ['/api/v4/agent/places',{methods:['GET'],query:['campusId']}],
+  ['/api/v4/agent/route',{methods:['POST'],query:[]}],
+  ['/api/v4/agent/route-image.png',{methods:['GET'],query:['data'],maxQueryLength:20520}],
+  ['/api/v4/agent/route-view',{methods:['GET'],query:['data'],maxQueryLength:20520}],
   ['/api/v1/simulation',{methods:['POST'],query:[]}],
   ...['/campus.html','/campus.css','/campus-app.js','/map-calibration.mjs','/map-projection.mjs','/review-actions.mjs','/simulator','/simulator.html'].map(path=>[path,{methods:['GET'],query:['v','campusId','schoolId','universityId']}])
 ]);
@@ -247,7 +251,7 @@ return {
     const v3route=platformRoute(url.pathname);
     if(v3route) {
       if(/[%\\]/.test(url.pathname))return json({error:'接口不存在'},404);
-      if(url.search.length>2048||[...url.searchParams.keys()].some(key=>!v3route.query.includes(key)||url.searchParams.getAll(key).length>1))return json({error:'请求包含未允许的查询参数'},400);
+      if(url.search.length>(v3route.maxQueryLength||2048)||[...url.searchParams.keys()].some(key=>!v3route.query.includes(key)||url.searchParams.getAll(key).length>1))return json({error:'请求包含未允许的查询参数'},400);
       if(request.method==='OPTIONS')return new Response(null,{status:204,headers:publicHeaders()});
       if(!v3route.methods.includes(request.method))return json({error:'请求方法不允许'},405);
       try {
@@ -264,7 +268,17 @@ return {
           try{for(;;){const {value,done}=await reader.read();if(done)break;size+=value.length;if(size>8*1024*1024){await reader.cancel();throw new GatewayError('图片不能超过8MB',413);}chunks.push(value);}}finally{reader.releaseLock();}
           body=new Uint8Array(size);let offset=0;for(const chunk of chunks){body.set(chunk,offset);offset+=chunk.length;}
         } else if(request.method==='POST') body=await requestJson(request);
-        return relay(await upstreamRequest(`${UPSTREAM_ORIGIN}${url.pathname}${url.search}`,request.method,body,{authorization,contentType}));
+        const upstream=await upstreamRequest(`${UPSTREAM_ORIGIN}${url.pathname}${url.search}`,request.method,body,{authorization,contentType});
+        if(url.pathname==='/api/v4/agent/route'&&upstream.response.ok){
+          const result=parseUpstreamJson(upstream.bytes);
+          for(const [key,path]of[['imageUrl','/api/v4/agent/route-image.png'],['viewUrl','/api/v4/agent/route-view']]){
+            const link=new URL(result[key]);
+            if(link.origin!==UPSTREAM_ORIGIN||link.pathname!==path||[...link.searchParams.keys()].some(k=>k!=='data'))throw new GatewayError('路线图片地址无效');
+            result[key]=`${url.origin}${link.pathname}${link.search}`;
+          }
+          return json(result);
+        }
+        return relay(upstream);
       }catch(error){return json({error:error.message||'网关请求失败'},error.status||502);}
     }
     const route = ROUTES.get(url.pathname);
@@ -338,6 +352,7 @@ export const config = {
     '/map-calibration.mjs', '/map-projection.mjs', '/review-actions.mjs',
     '/api/v4/universities', '/api/v4/campuses', '/api/v4/auth/*',
     '/api/v4/maps', '/api/v4/maps/*', '/api/v4/map-versions', '/api/v4/map-versions/*',
-    '/api/v4/admin/*', '/api/v4/analysis', '/api/v4/timetable', '/api/v4/assistant', '/api/v1/simulation'
+    '/api/v4/admin/*', '/api/v4/analysis', '/api/v4/timetable', '/api/v4/assistant', '/api/v1/simulation',
+    '/api/v4/agent/places', '/api/v4/agent/route', '/api/v4/agent/route-image.png', '/api/v4/agent/route-view'
   ]
 };
